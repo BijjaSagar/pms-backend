@@ -9,6 +9,8 @@ import { randomInt } from 'node:crypto';
 import { db } from '../prisma/db.js';
 import { brand, json, now } from '../prisma/compat.js';
 import { computeTotals, fromDecimal, toDecimal, type TaxRule } from '../common/money.js';
+import { activeTaxRules } from '../common/tax-rules.js';
+import { splitLedger } from '../common/ledger.js';
 import { AuditService } from '../audit/audit.service.js';
 
 export interface Balance {
@@ -24,16 +26,9 @@ export interface Balance {
 export class FolioService {
   constructor(private readonly audit: AuditService) {}
 
-  /** Tax rules currently in force for a property. */
+  /** Tax rules currently in force for a property. Shared with reservation estimates. */
   private async taxRules(propertyId: string): Promise<TaxRule[]> {
-    const rules = await db.orm.public.TaxRule
-      .where({ propertyId: brand(propertyId), isActive: brand(true) })
-      .all();
-    return rules.map((r) => ({
-      code: r.code,
-      ratePercent: Number(r.ratePercent),
-      isInclusive: r.isInclusive,
-    }));
+    return activeTaxRules(propertyId);
   }
 
   /**
@@ -107,7 +102,19 @@ export class FolioService {
     }
 
     const qty = Number(input.quantity);
-    const gross = fromDecimal(input.unitAmount).minor * qty;
+    if (!Number.isInteger(qty) || qty <= 0) {
+      throw new BadRequestException('Quantity must be a positive whole number');
+    }
+    let unit: ReturnType<typeof fromDecimal>;
+    try {
+      unit = fromDecimal(input.unitAmount);
+    } catch {
+      throw new BadRequestException('unitAmount must be a decimal amount with up to 2 decimals');
+    }
+    const gross = unit.minor * qty;
+    if (gross < 0 && input.type !== 'DISCOUNT' && input.type !== 'ADJUSTMENT') {
+      throw new BadRequestException('Only DISCOUNT or ADJUSTMENT lines may reduce a folio');
+    }
     const rules = await this.taxRules(
       (await db.orm.public.Folio.where({ id: brand(folioId) }).first())?.propertyId ?? '',
     );
@@ -205,13 +212,7 @@ export class FolioService {
     // TAX-typed lines hold tax and no charge of their own; every other line
     // holds a charge plus its own tax. Summing both columns across the live
     // lines keeps the printed folio internally consistent.
-    const chargesMinor = live
-      .filter((i) => i.type !== 'TAX')
-      .reduce((acc, i) => acc + fromDecimal(String(i.totalAmount)).minor, 0);
-    const taxMinor = live.reduce(
-      (acc, i) => acc + fromDecimal(String(i.taxAmount ?? 0)).minor,
-      0,
-    );
+    const { chargesMinor, taxMinor } = splitLedger(live);
     const totalMinor = chargesMinor + taxMinor;
 
     const payments = await db.orm.public.Payment.where({ folioId: brand(folioId) }).all();
@@ -260,6 +261,14 @@ export class FolioService {
     if (folio.status !== 'OPEN') {
       throw new ConflictException('Cannot post a payment to a closed folio');
     }
+
+    let tendered: ReturnType<typeof fromDecimal>;
+    try {
+      tendered = fromDecimal(input.amount);
+    } catch {
+      throw new BadRequestException('amount must be a decimal amount with up to 2 decimals');
+    }
+    if (tendered.minor <= 0) throw new BadRequestException('Payment amount must be positive');
 
     const payment = await db.orm.public.Payment.create({
       folioId: brand(folioId),
@@ -565,7 +574,12 @@ export class FolioService {
       throw new ConflictException('This payment has already been fully refunded');
     }
 
-    const requested = fromDecimal(amount).minor;
+    let requested: number;
+    try {
+      requested = fromDecimal(amount).minor;
+    } catch {
+      throw new BadRequestException('Refund amount must be a decimal amount with up to 2 decimals');
+    }
     if (requested <= 0) throw new BadRequestException('Refund amount must be positive');
     if (requested > refundable) {
       throw new ConflictException(

@@ -10,6 +10,7 @@ import {
   type DateOnly,
 } from '../common/dates.js';
 import { divide, fromDecimal, toDecimal } from '../common/money.js';
+import { splitLedger } from '../common/ledger.js';
 import { maskName } from '../common/pii.js';
 
 /**
@@ -238,9 +239,11 @@ export class ReportsService {
         .where((m) => m.folioId.in(closedOrOpen.map((f) => f.id)))
         .all();
 
+      // Tax comes from the shared ledger split so revenue states the same tax
+      // as the folio balance; TAX-typed lines carry no revenue of their own.
+      taxMinor = splitLedger(items).taxMinor;
       for (const i of items) {
-        if (i.isVoided) continue;
-        taxMinor += fromDecimal(String(i.taxAmount ?? 0)).minor;
+        if (i.isVoided || i.type === 'TAX') continue;
         const amount = fromDecimal(String(i.totalAmount)).minor;
         if (i.type === 'ROOM_CHARGE') roomRevenueMinor += amount;
         else otherRevenueMinor += amount;

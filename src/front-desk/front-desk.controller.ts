@@ -6,7 +6,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
-import { IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsISO8601, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
 import { RequirePermissions } from '../common/decorators/access.decorator.js';
 import { FrontDeskService } from './front-desk.service.js';
 import { FolioService } from '../folios/folio.service.js';
@@ -34,13 +34,15 @@ class ExtendDto {
 class PostChargeDto {
   @IsString() type: string;
   @IsString() @MaxLength(300) description: string;
-  @IsString() unitAmount: string;
-  @IsString() quantity: string;
+  // Positive decimal with up to 2 places. Reductions travel as DISCOUNT /
+  // ADJUSTMENT lines posted by the service, never as negative input here.
+  @IsString() @Matches(/^\d+(\.\d{1,2})?$/) unitAmount: string;
+  @IsString() @Matches(/^[1-9]\d*$/) quantity: string;
   @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
 }
 
 class PaymentDto {
-  @IsString() amount: string;
+  @IsString() @Matches(/^\d+(\.\d{1,2})?$/) amount: string;
   @IsString() method: string;
   @IsOptional() @IsString() @MaxLength(200) reference?: string;
   @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
@@ -52,7 +54,7 @@ class ReasonDto {
 }
 
 class RefundDto extends ReasonDto {
-  @IsString() amount: string;
+  @IsString() @Matches(/^\d+(\.\d{1,2})?$/) amount: string;
 }
 
 @Controller()

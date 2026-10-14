@@ -8,6 +8,7 @@ import { db } from '../prisma/db.js';
 import { brand, json, now, ts } from '../prisma/compat.js';
 import { addDays, businessDateFor, enumerateNights, type DateOnly } from '../common/dates.js';
 import { fromDecimal, toDecimal } from '../common/money.js';
+import { splitLedger } from '../common/ledger.js';
 import { AuditService } from '../audit/audit.service.js';
 
 /**
@@ -154,8 +155,7 @@ export class NightAuditService {
     // 4. Balances, so a supervisor can see what is outstanding at close.
     const outstanding = folios.map((f) => {
       const live = (itemsByFolio.get(f.id) ?? []).filter((i) => !i.isVoided);
-      const charges = live.reduce((a, i) => a + fromDecimal(String(i.totalAmount)).minor, 0);
-      const tax = live.reduce((a, i) => a + fromDecimal(String(i.taxAmount ?? 0)).minor, 0);
+      const { chargesMinor, taxMinor } = splitLedger(live);
       let paid = 0;
       for (const p of paymentsByFolio.get(f.id) ?? []) {
         if (p.status === 'PENDING' || p.status === 'FAILED') continue;
@@ -166,9 +166,9 @@ export class NightAuditService {
         folioId: f.id,
         folioNo: f.folioNo,
         status: f.status,
-        total: toDecimal({ minor: charges + tax }),
+        total: toDecimal({ minor: chargesMinor + taxMinor }),
         paid: toDecimal({ minor: paid }),
-        balance: toDecimal({ minor: charges + tax - paid }),
+        balance: toDecimal({ minor: chargesMinor + taxMinor - paid }),
       };
     });
 

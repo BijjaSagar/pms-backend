@@ -16,7 +16,8 @@ import {
   validateStay,
   type DateOnly,
 } from '../common/dates.js';
-import { fromDecimal, multiply, toDecimal } from '../common/money.js';
+import { fromDecimal, toDecimal } from '../common/money.js';
+import { activeTaxRules, estimateStay } from '../common/tax-rules.js';
 
 /** Postgres unique_violation. The constraint name tells us which guarantee fired. */
 function isUniqueViolation(err: unknown, constraint: string): boolean {
@@ -143,7 +144,8 @@ export class ReservationsService {
     }
 
     const nights = enumerateNights(input.checkInDate, input.checkOutDate);
-    // No RatePlan rows are seeded yet, so the nightly rate comes from the room
+    // RatePlan rows exist for future plan-based pricing, but the booking flow
+    // does not select a plan yet, so the nightly rate comes from the room
     // type's base rate. The snapshot is written now so a later rate change
     // cannot rewrite what this booking agreed to.
     //
@@ -151,7 +153,12 @@ export class ReservationsService {
     // 0.1 * 3 is 0.30000000000000004 in binary floating point, and that error
     // becomes a guest folio that does not reconcile.
     const nightlyRate = fromDecimal(String(roomType.baseRate));
-    const subtotal = multiply(nightlyRate, nights.length).minor / 100;
+    // Stored totals are gross: room charges plus tax under the property's
+    // active rules, so the reservation list agrees with the folio later.
+    const estimate = estimateStay(nightlyRate, nights.length, await activeTaxRules(property.id));
+    const subtotal = toDecimal(estimate.subtotal);
+    const taxTotal = toDecimal(estimate.taxTotal);
+    const total = toDecimal(estimate.grandTotal);
 
     try {
       return await db.transaction(async (tx: any) => {
@@ -170,9 +177,9 @@ export class ReservationsService {
               adults: brand(input.adults),
               children: brand(input.children),
               currencyCode: brand(property.currencyCode),
-              subtotal: brand(String(subtotal)),
-              taxTotal: brand('0'),
-              totalAmount: brand(String(subtotal)),
+              subtotal: brand(subtotal),
+              taxTotal: brand(taxTotal),
+              totalAmount: brand(total),
               specialRequests: brand(input.notes ?? null),
             });
           } catch (e) {
@@ -234,9 +241,9 @@ export class ReservationsService {
           checkInDate: reservation.checkInDate,
           checkOutDate: reservation.checkOutDate,
           nights: nights.length,
-          subtotal: String(subtotal),
-          taxTotal: '0',
-          totalAmount: String(subtotal),
+          subtotal,
+          taxTotal,
+          totalAmount: total,
           currencyCode: reservation.currencyCode,
           roomAssigned: !!input.roomId,
         };
@@ -341,7 +348,8 @@ export class ReservationsService {
 
   /**
    * Amends dates or party size. Old nights are released and new ones claimed in
-   * one transaction, and the rate snapshot is recomputed from the room type.
+   * one transaction, and the stored estimate is recomputed at the reservation's
+   * own snapshot rate.
    */
   async update(req: any, reservationId: string, body: any) {
     const property = await this.activeProperty(req);
@@ -377,8 +385,13 @@ export class ReservationsService {
 
     const roomType = await db.orm.public.RoomType.where({ id: brand(rr.roomTypeId) }).first();
     const nights = enumerateNights(checkIn, checkOut);
-    const nightlyRate = fromDecimal(String(roomType?.baseRate ?? rr.nightlyRate));
-    const subtotal = multiply(nightlyRate, nights.length).minor / 100;
+    // The agreed nightly rate survives amendments and later base-rate edits;
+    // only the night count changes here.
+    const nightlyRate = fromDecimal(String(rr.nightlyRate ?? roomType?.baseRate ?? '0'));
+    const estimate = estimateStay(nightlyRate, nights.length, await activeTaxRules(property.id));
+    const subtotal = toDecimal(estimate.subtotal);
+    const taxTotal = toDecimal(estimate.taxTotal);
+    const total = toDecimal(estimate.grandTotal);
 
     const datesChanged = checkIn !== reservation.checkInDate || checkOut !== reservation.checkOutDate;
 
@@ -413,8 +426,9 @@ export class ReservationsService {
         const patch: Record<string, never> = {
           checkInDate: brand(checkIn),
           checkOutDate: brand(checkOut),
-          subtotal: brand(String(subtotal)),
-          totalAmount: brand(String(subtotal)),
+          subtotal: brand(subtotal),
+          taxTotal: brand(taxTotal),
+          totalAmount: brand(total),
         };
         if (body.adults !== undefined) patch['adults'] = brand(body.adults);
         if (body.children !== undefined) patch['children'] = brand(body.children);
@@ -451,8 +465,9 @@ export class ReservationsService {
           checkInDate: checkIn,
           checkOutDate: checkOut,
           nights: nights.length,
-          subtotal: String(subtotal),
-          totalAmount: String(subtotal),
+          subtotal,
+          taxTotal,
+          totalAmount: total,
           roomReallocated: datesChanged && !!rr.roomId,
         };
       });

@@ -222,8 +222,9 @@ async function main() {
     );
 
     // Rate plans + nightly prices for the next ~60 nights (plus a 15-night
-    // lookback so recent stays price too). The booking flow still snapshots
-    // the room-type base rate; these rows drive the Rates UI and reports.
+    // lookback so recent stays price too). Reserved for future plan-based
+    // pricing: the booking flow still snapshots the room-type base rate, and
+    // neither the Rates UI nor reports read these rows yet.
     const ratePlans = [
       { code: 'BAR', name: 'Best Available Rate', rate: 3500, refundable: true, minStay: 1, policy: 'Free cancellation until 24h before arrival.' },
       { code: 'CORP', name: 'Corporate', rate: 3000, refundable: true, minStay: 1, policy: 'Corporate direct billing. Free cancellation until check-in.' },

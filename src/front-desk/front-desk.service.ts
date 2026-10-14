@@ -9,7 +9,8 @@ import { db } from '../prisma/db.js';
 import { brand, now, ts } from '../prisma/compat.js';
 import { AuditService } from '../audit/audit.service.js';
 import { FolioService } from '../folios/folio.service.js';
-import { fromDecimal } from '../common/money.js';
+import { fromDecimal, toDecimal } from '../common/money.js';
+import { activeTaxRules, estimateStay } from '../common/tax-rules.js';
 import {
   addDays,
   businessDateFor,
@@ -237,7 +238,7 @@ export class FrontDeskService {
       );
     }
 
-    const balance = await this.folios.balance(folio.id);
+    let balance = await this.folios.balance(folio.id);
     const owing = fromDecimal(balance.balance).minor;
 
     if (owing > 0) {
@@ -255,6 +256,19 @@ export class FrontDeskService {
           'You do not have permission to waive an outstanding balance.',
         );
       }
+      // The waiver is posted as a labelled adjustment, idempotency-keyed to the
+      // stay, so the folio, the invoice and the audit trail all state the same
+      // settled figures instead of the invoice restating the waived total.
+      await this.folios.postCharge(folio.id, {
+        type: 'ADJUSTMENT',
+        description: `Balance waived: ${reason}`,
+        quantity: 1,
+        unitAmount: `-${balance.balance}`,
+        taxable: false,
+        postedById: req.user?.id ?? null,
+        idempotencyKey: `checkout-waiver:${reservation.id}`,
+      });
+      balance = await this.folios.balance(folio.id);
     }
 
     const room = line.roomId
@@ -304,7 +318,7 @@ export class FrontDeskService {
             nightsStayed: stayedNights,
             total: balance.total,
             paid: balance.paid,
-            waived: owing > 0 ? balance.balance : '0.00',
+            waived: owing > 0 ? toDecimal({ minor: owing }) : '0.00',
           },
         },
         tx,
@@ -357,6 +371,18 @@ export class FrontDeskService {
     const addedNights = enumerateNights(currentOut, newCheckOutDate);
     const room = await db.orm.public.Room.where({ id: brand(line.roomId) }).first();
 
+    // The added nights extend the stored estimate at the reservation's own
+    // snapshot rate, so the list total keeps matching the folio to come.
+    const fullNights = enumerateNights(String(reservation.checkInDate) as DateOnly, newCheckOutDate);
+    const extended = estimateStay(
+      fromDecimal(String(line.nightlyRate)),
+      fullNights.length,
+      await activeTaxRules(property.id),
+    );
+    const extendedSubtotal = toDecimal(extended.subtotal);
+    const extendedTaxTotal = toDecimal(extended.taxTotal);
+    const extendedTotal = toDecimal(extended.grandTotal);
+
     try {
       return await db.transaction(async (tx: any) => {
         for (const night of addedNights) {
@@ -379,6 +405,9 @@ export class FrontDeskService {
         }
         await tx.orm.public.Reservation.where({ id: brand(reservation.id) }).update({
           checkOutDate: brand(newCheckOutDate),
+          subtotal: brand(extendedSubtotal),
+          taxTotal: brand(extendedTaxTotal),
+          totalAmount: brand(extendedTotal),
         });
         await this.audit.record(
           {
@@ -398,6 +427,10 @@ export class FrontDeskService {
           previousCheckOut: currentOut,
           checkOutDate: newCheckOutDate,
           addedNights: addedNights.length,
+          nights: fullNights.length,
+          subtotal: extendedSubtotal,
+          taxTotal: extendedTaxTotal,
+          totalAmount: extendedTotal,
           roomNumber: room?.roomNumber ?? null,
         };
       });
