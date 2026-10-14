@@ -16,11 +16,8 @@ import { CsrfMiddleware } from './common/middleware/csrf.middleware.js';
 /**
  * Global per-IP request ceiling.
  *
- * Environment-driven so the verification suites can run several phases back to
- * back without tripping it. A suite performs five role logins plus one per
- * account it creates, which overruns the production ceiling repeatedly — and a
- * throttled suite reports failures that say nothing about the code under test.
- * The default is the production value; only the test harness raises it.
+ * Environment-driven so scripted harnesses can raise it locally without
+ * touching code. The default is the production value.
  */
 const GLOBAL_RATE_LIMIT = parseInt(process.env['RATE_LIMIT_PER_MINUTE'] ?? '120', 10);
 import { FrontDeskModule } from './front-desk/front-desk.module.js';

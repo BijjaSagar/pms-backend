@@ -349,7 +349,7 @@ export class UsersService {
 
   /** Changes the role held at a property. Audited, and escalation-checked. */
   async setRole(req: any, userId: string, propertyId: string, roleKey: string) {
-    const { property, organizationId } = await this.context(req);
+    const { organizationId } = await this.context(req);
 
     const user = await db.orm.public.User.where({ id: brand(userId) }).first();
     if (!user) throw new NotFoundException('User not found');

@@ -9,7 +9,7 @@ import { db } from '../prisma/db.js';
 import { brand, now, ts } from '../prisma/compat.js';
 import { AuditService } from '../audit/audit.service.js';
 import { FolioService } from '../folios/folio.service.js';
-import { fromDecimal, toDecimal } from '../common/money.js';
+import { fromDecimal } from '../common/money.js';
 import {
   addDays,
   businessDateFor,

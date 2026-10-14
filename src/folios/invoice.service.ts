@@ -7,7 +7,7 @@ import {
 import { randomInt } from 'node:crypto';
 import { db } from '../prisma/db.js';
 import { brand, now } from '../prisma/compat.js';
-import { fromDecimal, toDecimal } from '../common/money.js';
+import { fromDecimal } from '../common/money.js';
 import { AuditService } from '../audit/audit.service.js';
 import { FolioService } from './folio.service.js';
 

@@ -2,7 +2,6 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { db } from '../prisma/db.js';
 import { brand } from '../prisma/compat.js';
 import { AuditService } from '../audit/audit.service.js';
-import { RequirePermissions } from '../common/decorators/access.decorator.js';
 import { maskEmail as piiMaskEmail, maskPhone as piiMaskPhone } from '../common/pii.js';
 import type { AuthenticatedRequest } from '../common/guards/auth.guard.js';
 

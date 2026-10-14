@@ -9,7 +9,7 @@ import {
   Req,
   Res,
 } from '@nestjs/common';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsString, MaxLength } from 'class-validator';
 import { RequirePermissions } from '../common/decorators/access.decorator.js';
 import type { AuthenticatedRequest } from '../common/guards/auth.guard.js';
 import { ReportsService } from './reports.service.js';

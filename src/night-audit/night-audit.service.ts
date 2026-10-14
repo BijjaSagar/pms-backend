@@ -96,8 +96,6 @@ export class NightAuditService {
     const folios = reservations.length
       ? await db.orm.public.Folio.where((m) => m.reservationId.in(reservations.map((r) => r.id))).all()
       : [];
-    const folioByRes = new Map(folios.map((f) => [f.reservationId, f]));
-
     const items = folios.length
       ? await db.orm.public.FolioItem.where((m) => m.folioId.in(folios.map((f) => f.id))).all()
       : [];
