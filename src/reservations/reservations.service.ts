@@ -573,6 +573,7 @@ export class ReservationsService {
 
     let rows = await db.orm.public.Reservation
       .where({ propertyId: brand(property.id) })
+      .orderBy((r) => r.createdAt.desc())
       .limit(take + 1)
       .offset(skip * take)
       .all();
