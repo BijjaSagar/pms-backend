@@ -1,0 +1,822 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum UserStatus {
+  INVITED
+  ACTIVE
+  DISABLED
+}
+
+enum RoomStatus {
+  VACANT_CLEAN
+  VACANT_DIRTY
+  OCCUPIED_CLEAN
+  OCCUPIED_DIRTY
+  INSPECTED
+  OUT_OF_ORDER
+}
+
+enum ReservationStatus {
+  DRAFT
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+}
+
+enum BookingSource {
+  DIRECT
+  WALK_IN
+  PHONE
+  EMAIL
+  OTA
+  CORPORATE
+  OTHER
+}
+
+enum FolioStatus {
+  OPEN
+  CLOSED
+  VOID
+}
+
+enum FolioItemType {
+  ROOM_CHARGE
+  TAX
+  INCIDENTAL
+  FEE
+  DISCOUNT
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum PaymentMethod {
+  CASH
+  CARD_TERMINAL
+  UPI
+  BANK_TRANSFER
+  PAYMENT_LINK
+  CORPORATE_ACCOUNT
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  VOID
+  CREDITED
+}
+
+enum HousekeepingTaskType {
+  CHECKOUT_CLEAN
+  STAYOVER_CLEAN
+  INSPECTION
+  TURNDOWN
+  SPECIAL_REQUEST
+  LINEN_CHANGE
+  OTHER
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum HousekeepingTaskStatus {
+  TODO
+  IN_PROGRESS
+  CLEANED
+  INSPECTION_REQUIRED
+  READY
+  BLOCKED
+  CANCELLED
+}
+
+enum MaintenanceCategory {
+  PLUMBING
+  ELECTRICAL
+  HVAC
+  FURNITURE
+  APPLIANCE
+  SAFETY
+  IT
+  OTHER
+}
+
+enum MaintenancePriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum MaintenanceStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum NightAuditStatus {
+  PREVIEWED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  REOPENED
+}
+
+enum ThemeKey {
+  MIDNIGHT_NAVY
+  SKY_BLUE_WHITE
+  LUXURY_BEIGE_TAUPE
+  SAGE_GREEN
+  SOFT_BLUE_SLATE
+  EUCALYPTUS
+  OLIVE_CREAM
+  DUSTY_LAVENDER
+}
+
+enum TaxAppliesTo {
+  ROOM
+  INCIDENTAL
+  ALL
+}
+
+enum NotificationType {
+  RESERVATION
+  ARRIVAL
+  DEPARTURE
+  HOUSEKEEPING
+  MAINTENANCE
+  PAYMENT
+  NIGHT_AUDIT
+  SYSTEM
+}
+
+model Organization {
+  id        String             @id @default(uuid()) @db.Uuid
+  name      String             @db.VarChar(200)
+  slug      String             @unique @db.VarChar(100)
+  status    OrganizationStatus @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  properties Property[]
+  roles      Role[]
+  guests     Guest[]
+  auditLogs  AuditLog[]
+
+  @@index([status])
+}
+
+model Property {
+  id                  String   @id @default(uuid()) @db.Uuid
+  organizationId      String   @db.Uuid
+  name                String   @db.VarChar(200)
+  slug                String   @db.VarChar(100)
+  timezone            String   @default("Asia/Kolkata") @db.VarChar(100)
+  currencyCode        String   @default("INR") @db.VarChar(3)
+  countryCode         String   @default("IN") @db.VarChar(2)
+  addressLine1        String?  @db.VarChar(200)
+  addressLine2        String?  @db.VarChar(200)
+  city                String?  @db.VarChar(100)
+  region              String?  @db.VarChar(100)
+  postalCode          String?  @db.VarChar(30)
+  checkInTime         String   @default("14:00") @db.VarChar(5)
+  checkOutTime        String   @default("11:00") @db.VarChar(5)
+  taxInclusivePricing Boolean  @default(false)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  organization       Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  memberships        PropertyMembership[]
+  rooms              Room[]
+  roomTypes          RoomType[]
+  ratePlans          RatePlan[]
+  taxRules           TaxRule[]
+  reservations       Reservation[]
+  folios             Folio[]
+  invoices           Invoice[]
+  housekeepingTasks  HousekeepingTask[]
+  maintenanceTickets MaintenanceTicket[]
+  nightAudits        NightAudit[]
+  auditLogs          AuditLog[]
+  themePreferences   UserThemePreference[]
+  notifications      Notification[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, isActive])
+}
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  email             String     @unique @db.VarChar(320)
+  fullName          String     @db.VarChar(200)
+  passwordHash      String?    @db.VarChar(255)
+  status            UserStatus @default(INVITED)
+  emailVerifiedAt   DateTime?
+  lastLoginAt       DateTime?
+  passwordChangedAt DateTime?
+  /// One-time token that lets an invited person set their own password.
+  ///
+  /// Stored on the User rather than a separate Invitation table because a
+  /// person can hold memberships at several properties and one token admits
+  /// them to all of them. Cleared the moment it is consumed, so it cannot be
+  /// replayed. Nullable, so existing accounts are unaffected.
+  inviteToken       String?    @unique @db.VarChar(120)
+  /// When the invite stops working. Set per invitation by the administrator
+  /// rather than being a fixed window, because how long a new hire has to
+  /// respond depends on the property.
+  inviteExpiresAt   DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  propertyMemberships PropertyMembership[]
+  sessions            Session[]
+  createdReservations Reservation[]          @relation("ReservationCreator")
+  assignedTasks       HousekeepingTask[]      @relation("TaskAssignee")
+  createdTasks        HousekeepingTask[]      @relation("TaskCreator")
+  reportedTickets     MaintenanceTicket[]     @relation("MaintenanceReporter")
+  assignedTickets     MaintenanceTicket[]     @relation("MaintenanceAssignee")
+  auditEvents         AuditLog[]              @relation("AuditActor")
+  postedFolioItems    FolioItem[]             @relation("FolioItemPoster")
+  receivedPayments    Payment[]               @relation("PaymentReceiver")
+  startedNightAudits  NightAudit[]             @relation("NightAuditStarter")
+  completedNightAudits NightAudit[]            @relation("NightAuditCompleter")
+  themePreferences    UserThemePreference[]
+  notifications       Notification[]
+
+  @@index([status, lastLoginAt])
+}
+
+model Role {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  key            String   @db.VarChar(60)
+  name           String   @db.VarChar(100)
+  description    String?  @db.VarChar(500)
+  isSystem       Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  permissions  RolePermission[]
+  memberships  PropertyMembership[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId, isActive])
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique @db.VarChar(120)
+  resource    String   @db.VarChar(80)
+  action      String   @db.VarChar(80)
+  description String?  @db.VarChar(500)
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([resource, action])
+}
+
+model RolePermission {
+  roleId       String   @db.Uuid
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+}
+
+model PropertyMembership {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  propertyId String   @db.Uuid
+  roleId     String   @db.Uuid
+  isActive   Boolean  @default(true)
+  invitedAt  DateTime @default(now())
+  acceptedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  role     Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, propertyId])
+  @@index([propertyId, isActive])
+  @@index([roleId, isActive])
+}
+
+model Session {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  tokenHash         String    @unique @db.VarChar(255)
+  // Set at login and on explicit property switch. Validated against the user's
+  // PropertyMembership rows on every request; never trusted on its own.
+  activePropertyId  String?   @db.Uuid
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  ipAddress         String?   @db.VarChar(64)
+  userAgent         String?   @db.VarChar(500)
+  createdAt         DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([revokedAt, expiresAt])
+  @@index([userId, activePropertyId])
+}
+
+model Guest {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  firstName      String   @db.VarChar(100)
+  lastName       String   @db.VarChar(100)
+  email          String?  @db.VarChar(320)
+  phone          String?  @db.VarChar(40)
+  companyName    String?  @db.VarChar(200)
+  addressLine1   String?  @db.VarChar(200)
+  addressLine2   String?  @db.VarChar(200)
+  city           String?  @db.VarChar(100)
+  region         String?  @db.VarChar(100)
+  postalCode     String?  @db.VarChar(30)
+  countryCode    String?  @db.VarChar(2)
+  preferences    String?  @db.Text
+  internalNotes  String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  reservations Reservation[]
+
+  @@index([organizationId, lastName, firstName])
+  @@index([organizationId, email])
+  @@index([organizationId, phone])
+}
+
+model RoomType {
+  id             String   @id @default(uuid()) @db.Uuid
+  propertyId     String   @db.Uuid
+  code           String   @db.VarChar(40)
+  name           String   @db.VarChar(120)
+  description    String?  @db.Text
+  maxAdults      Int      @default(2)
+  maxChildren    Int      @default(0)
+  baseOccupancy  Int      @default(2)
+  baseRate       Decimal  @default(0) @db.Decimal(12, 2)
+  amenities      Json?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  property     Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  rooms        Room[]
+  ratePlans    RatePlan[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@index([propertyId, isActive])
+}
+
+model Room {
+  id          String     @id @default(uuid()) @db.Uuid
+  propertyId  String     @db.Uuid
+  roomTypeId  String     @db.Uuid
+  roomNumber  String     @db.VarChar(30)
+  floor       String?    @db.VarChar(30)
+  wing        String?    @db.VarChar(50)
+  status      RoomStatus @default(VACANT_DIRTY)
+  notes       String?    @db.Text
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  property          Property             @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomType          RoomType             @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  reservationRooms  ReservationRoom[]
+  nightInventory    RoomNightInventory[]
+  housekeepingTasks HousekeepingTask[]
+  maintenanceTickets MaintenanceTicket[]
+
+  @@unique([propertyId, roomNumber])
+  @@index([propertyId, status, isActive])
+  @@index([roomTypeId, isActive])
+}
+
+model RatePlan {
+  id                String   @id @default(uuid()) @db.Uuid
+  propertyId        String   @db.Uuid
+  roomTypeId        String?  @db.Uuid
+  code              String   @db.VarChar(40)
+  name              String   @db.VarChar(120)
+  description       String?  @db.Text
+  currencyCode      String   @default("INR") @db.VarChar(3)
+  defaultNightlyRate Decimal @db.Decimal(12, 2)
+  cancellationPolicy String? @db.Text
+  minStayNights     Int      @default(1)
+  isRefundable      Boolean  @default(true)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  property        Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  roomType        RoomType?         @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  nightlyPrices   RatePlanPrice[]
+  reservationRooms ReservationRoom[]
+
+  @@unique([propertyId, code])
+  @@index([propertyId, isActive])
+}
+
+model RatePlanPrice {
+  id                 String   @id @default(uuid()) @db.Uuid
+  ratePlanId         String   @db.Uuid
+  stayDate           DateTime @db.Date
+  nightlyRate        Decimal  @db.Decimal(12, 2)
+  minimumStayNights  Int?
+  stopSell           Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  ratePlan RatePlan @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+
+  @@unique([ratePlanId, stayDate])
+  @@index([stayDate, stopSell])
+}
+
+model TaxRule {
+  id             String       @id @default(uuid()) @db.Uuid
+  propertyId     String       @db.Uuid
+  code           String       @db.VarChar(40)
+  name           String       @db.VarChar(120)
+  ratePercent    Decimal      @db.Decimal(7, 4)
+  appliesTo      TaxAppliesTo @default(ALL)
+  isInclusive    Boolean      @default(false)
+  isCompound     Boolean      @default(false)
+  validFrom      DateTime?    @db.Date
+  validTo        DateTime?    @db.Date
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([propertyId, code])
+  @@index([propertyId, isActive, validFrom, validTo])
+}
+
+model Reservation {
+  id                String            @id @default(uuid()) @db.Uuid
+  propertyId        String            @db.Uuid
+  bookingCode       String            @db.VarChar(40)
+  status            ReservationStatus @default(DRAFT)
+  source            BookingSource     @default(DIRECT)
+  primaryGuestId    String            @db.Uuid
+  createdById       String?           @db.Uuid
+  checkInDate       DateTime          @db.Date
+  checkOutDate      DateTime          @db.Date
+  adults            Int               @default(1)
+  children          Int               @default(0)
+  currencyCode      String            @default("INR") @db.VarChar(3)
+  subtotal          Decimal           @default(0) @db.Decimal(12, 2)
+  taxTotal          Decimal           @default(0) @db.Decimal(12, 2)
+  totalAmount       Decimal           @default(0) @db.Decimal(12, 2)
+  specialRequests   String?           @db.Text
+  cancellationReason String?          @db.Text
+  cancelledAt       DateTime?
+  checkedInAt       DateTime?
+  checkedOutAt      DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  property      Property          @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  primaryGuest  Guest             @relation(fields: [primaryGuestId], references: [id], onDelete: Restrict)
+  createdBy     User?             @relation("ReservationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  rooms         ReservationRoom[]
+  folios        Folio[]
+
+  @@unique([propertyId, bookingCode])
+  @@index([propertyId, status, checkInDate])
+  @@index([propertyId, checkOutDate])
+  @@index([primaryGuestId, createdAt])
+}
+
+model ReservationRoom {
+  id             String   @id @default(uuid()) @db.Uuid
+  reservationId  String   @db.Uuid
+  roomTypeId     String   @db.Uuid
+  roomId         String?  @db.Uuid
+  adults         Int      @default(1)
+  children       Int      @default(0)
+  nightlyRate    Decimal  @default(0) @db.Decimal(12, 2)
+  ratePlanId     String?  @db.Uuid
+  ratePlanName   String?  @db.VarChar(120)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  reservation Reservation           @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  roomType    RoomType              @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  room        Room?                 @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  ratePlan    RatePlan?             @relation(fields: [ratePlanId], references: [id], onDelete: SetNull)
+  nights      RoomNightInventory[]
+
+  @@index([reservationId])
+  @@index([roomTypeId, roomId])
+  @@index([ratePlanId])
+}
+
+model RoomNightInventory {
+  id                String   @id @default(uuid()) @db.Uuid
+  roomId            String   @db.Uuid
+  reservationRoomId String   @db.Uuid
+  stayDate          DateTime @db.Date
+  createdAt         DateTime @default(now())
+
+  room            Room            @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  reservationRoom ReservationRoom @relation(fields: [reservationRoomId], references: [id], onDelete: Restrict)
+
+  @@unique([roomId, stayDate])
+  @@unique([reservationRoomId, stayDate])
+  @@index([stayDate])
+}
+
+model Folio {
+  id           String      @id @default(uuid()) @db.Uuid
+  propertyId   String      @db.Uuid
+  reservationId String     @db.Uuid
+  folioNo      String      @db.VarChar(50)
+  status       FolioStatus @default(OPEN)
+  currencyCode String      @default("INR") @db.VarChar(3)
+  openedAt     DateTime    @default(now())
+  closedAt     DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  property    Property    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  items       FolioItem[]
+  payments    Payment[]
+  invoices    Invoice[]
+
+  @@unique([propertyId, folioNo])
+  @@index([propertyId, status, openedAt])
+  @@index([reservationId])
+}
+
+model FolioItem {
+  id              String        @id @default(uuid()) @db.Uuid
+  folioId         String        @db.Uuid
+  type            FolioItemType
+  description     String        @db.VarChar(300)
+  quantity        Decimal       @default(1) @db.Decimal(10, 2)
+  unitAmount      Decimal       @default(0) @db.Decimal(12, 2)
+  taxAmount       Decimal       @default(0) @db.Decimal(12, 2)
+  taxSnapshot     Json?
+  totalAmount     Decimal       @default(0) @db.Decimal(12, 2)
+  postedById      String?       @db.Uuid
+  idempotencyKey  String?       @unique @db.VarChar(120)
+  reason          String?       @db.Text
+  isVoided        Boolean       @default(false)
+  voidedAt        DateTime?
+  createdAt       DateTime      @default(now())
+
+  folio    Folio @relation(fields: [folioId], references: [id], onDelete: Restrict)
+  postedBy User? @relation("FolioItemPoster", fields: [postedById], references: [id], onDelete: SetNull)
+
+  @@index([folioId, createdAt])
+  @@index([postedById, createdAt])
+}
+
+model Payment {
+  id                 String        @id @default(uuid()) @db.Uuid
+  folioId            String        @db.Uuid
+  amount             Decimal       @db.Decimal(12, 2)
+  currencyCode       String        @db.VarChar(3)
+  method             PaymentMethod
+  status             PaymentStatus @default(PENDING)
+  reference          String?       @db.VarChar(200)
+  provider           String?       @db.VarChar(100)
+  receivedById       String?       @db.Uuid
+  idempotencyKey     String?       @unique @db.VarChar(120)
+  /// Cumulative amount refunded against this payment.
+  ///
+  /// PaymentStatus carries PARTIALLY_REFUNDED, which needs a number to compare
+  /// against the original amount. Deriving it by summing child rows would make
+  /// every balance query subtler than the single authoritative column it should
+  /// be, so the running total is stored instead.
+  refundedAmount     Decimal?      @db.Decimal(12, 2)
+  recordedAt         DateTime      @default(now())
+  settledAt          DateTime?
+  refundedAt         DateTime?
+  reason             String?       @db.Text
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  folio      Folio @relation(fields: [folioId], references: [id], onDelete: Restrict)
+  receivedBy User? @relation("PaymentReceiver", fields: [receivedById], references: [id], onDelete: SetNull)
+
+  @@index([folioId, status, recordedAt])
+  @@index([provider, reference])
+}
+
+model Invoice {
+  id           String        @id @default(uuid()) @db.Uuid
+  propertyId   String        @db.Uuid
+  folioId      String        @db.Uuid
+  invoiceNo    String        @db.VarChar(60)
+  status       InvoiceStatus @default(DRAFT)
+  currencyCode String        @db.VarChar(3)
+  subtotal     Decimal       @default(0) @db.Decimal(12, 2)
+  taxTotal     Decimal       @default(0) @db.Decimal(12, 2)
+  totalAmount  Decimal       @default(0) @db.Decimal(12, 2)
+  issuedAt     DateTime?
+  voidedAt     DateTime?
+  voidReason   String?       @db.Text
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  folio    Folio    @relation(fields: [folioId], references: [id], onDelete: Restrict)
+
+  @@unique([propertyId, invoiceNo])
+  @@index([propertyId, status, issuedAt])
+  @@index([folioId])
+}
+
+model HousekeepingTask {
+  id           String                 @id @default(uuid()) @db.Uuid
+  propertyId   String                 @db.Uuid
+  roomId       String                 @db.Uuid
+  type         HousekeepingTaskType
+  priority     TaskPriority           @default(NORMAL)
+  status       HousekeepingTaskStatus @default(TODO)
+  assignedToId String?                @db.Uuid
+  createdById  String?                @db.Uuid
+  dueAt        DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  inspectedAt  DateTime?
+  notes        String?                @db.Text
+  blockedReason String?               @db.Text
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  property  Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  assignedTo User?   @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy  User?   @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([propertyId, status, dueAt])
+  @@index([assignedToId, status, dueAt])
+  @@index([roomId, createdAt])
+}
+
+model MaintenanceTicket {
+  id            String             @id @default(uuid()) @db.Uuid
+  propertyId    String             @db.Uuid
+  roomId        String?            @db.Uuid
+  ticketNo      String             @db.VarChar(50)
+  title         String             @db.VarChar(200)
+  description   String             @db.Text
+  category      MaintenanceCategory @default(OTHER)
+  priority      MaintenancePriority @default(NORMAL)
+  status        MaintenanceStatus  @default(OPEN)
+  reportedById  String?            @db.Uuid
+  assignedToId  String?            @db.Uuid
+  resolution    String?            @db.Text
+  resolvedAt    DateTime?
+  closedAt      DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  room       Room?    @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  reportedBy User?    @relation("MaintenanceReporter", fields: [reportedById], references: [id], onDelete: SetNull)
+  assignedTo User?    @relation("MaintenanceAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  @@unique([propertyId, ticketNo])
+  @@index([propertyId, status, priority])
+  @@index([roomId, createdAt])
+  @@index([assignedToId, status])
+}
+
+model NightAudit {
+  id                String           @id @default(uuid()) @db.Uuid
+  propertyId        String           @db.Uuid
+  businessDate      DateTime         @db.Date
+  status            NightAuditStatus @default(PREVIEWED)
+  startedById       String?          @db.Uuid
+  completedById     String?          @db.Uuid
+  previewSummary    Json?
+  finalSummary      Json?
+  exceptionSummary  Json?
+  idempotencyKey    String?          @unique @db.VarChar(120)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  reopenedAt        DateTime?
+  reopenReason      String?          @db.Text
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  startedBy   User?    @relation("NightAuditStarter", fields: [startedById], references: [id], onDelete: SetNull)
+  completedBy User?    @relation("NightAuditCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+
+  @@unique([propertyId, businessDate])
+  @@index([propertyId, status, businessDate])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  propertyId     String?  @db.Uuid
+  actorUserId    String?  @db.Uuid
+  action         String   @db.VarChar(120)
+  resourceType   String   @db.VarChar(100)
+  resourceId     String?  @db.VarChar(100)
+  outcome        String   @default("SUCCESS") @db.VarChar(30)
+  reason         String?  @db.Text
+  requestId      String?  @db.VarChar(100)
+  ipAddress      String?  @db.VarChar(64)
+  userAgent      String?  @db.VarChar(500)
+  beforeData     Json?
+  afterData      Json?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  property     Property?    @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  actor        User?        @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([propertyId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([resourceType, resourceId])
+  // Intentionally no updatedAt: application policy treats audit records as append-only.
+}
+
+model UserThemePreference {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  propertyId String   @db.Uuid
+  themeKey   ThemeKey @default(LUXURY_BEIGE_TAUPE)
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, propertyId])
+  @@index([propertyId, themeKey])
+}
+
+model Notification {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String           @db.Uuid
+  propertyId String           @db.Uuid
+  type       NotificationType
+  title      String           @db.VarChar(200)
+  body       String           @db.Text
+  targetPath String?          @db.VarChar(500)
+  readAt     DateTime?
+  createdAt  DateTime         @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+
+  @@index([userId, readAt, createdAt])
+  @@index([propertyId, type, createdAt])
+}

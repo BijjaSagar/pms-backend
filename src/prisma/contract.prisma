@@ -1,5 +1,0 @@
-// use prisma-8
-
-// Connection-only contract: no models yet.
-// Add Hotel PMS models here (e.g. Hotel, Room, Guest, Reservation),
-// then run: npx prisma contract emit

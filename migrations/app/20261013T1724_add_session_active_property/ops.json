@@ -1,0 +1,83 @@
+[
+  {
+    "id": "column.public.Session.activePropertyId",
+    "label": "Add column \"activePropertyId\" to \"Session\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "activePropertyId",
+        "table": "Session"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"activePropertyId\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "Session",
+          "activePropertyId"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"activePropertyId\"",
+        "sql": "ALTER TABLE \"public\".\"Session\" ADD COLUMN \"activePropertyId\" uuid"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"activePropertyId\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "Session",
+          "activePropertyId"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.Session.Session_userId_activePropertyId_idx",
+    "label": "Create index \"Session_userId_activePropertyId_idx\" on \"Session\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "Session_userId_activePropertyId_idx",
+        "table": "Session"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"Session_userId_activePropertyId_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"Session_userId_activePropertyId_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"Session_userId_activePropertyId_idx\"",
+        "sql": "CREATE INDEX \"Session_userId_activePropertyId_idx\" ON \"public\".\"Session\" (\"userId\", \"activePropertyId\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"Session_userId_activePropertyId_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"Session_userId_activePropertyId_idx\""
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,125 @@
+[
+  {
+    "id": "column.public.User.inviteExpiresAt",
+    "label": "Add column \"inviteExpiresAt\" to \"User\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "inviteExpiresAt",
+        "table": "User"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"inviteExpiresAt\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "User",
+          "inviteExpiresAt"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"inviteExpiresAt\"",
+        "sql": "ALTER TABLE \"public\".\"User\" ADD COLUMN \"inviteExpiresAt\" timestamp(3)"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"inviteExpiresAt\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "User",
+          "inviteExpiresAt"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "column.public.User.inviteToken",
+    "label": "Add column \"inviteToken\" to \"User\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "inviteToken",
+        "table": "User"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"inviteToken\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "User",
+          "inviteToken"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"inviteToken\"",
+        "sql": "ALTER TABLE \"public\".\"User\" ADD COLUMN \"inviteToken\" character varying(120)"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"inviteToken\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "User",
+          "inviteToken"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.User.User_inviteToken_key",
+    "label": "Create index \"User_inviteToken_key\" on \"User\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "User_inviteToken_key",
+        "table": "User"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"User_inviteToken_key\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"User_inviteToken_key\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"User_inviteToken_key\"",
+        "sql": "CREATE UNIQUE INDEX \"User_inviteToken_key\" ON \"public\".\"User\" (\"inviteToken\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"User_inviteToken_key\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"User_inviteToken_key\""
+        ]
+      }
+    ]
+  }
+]

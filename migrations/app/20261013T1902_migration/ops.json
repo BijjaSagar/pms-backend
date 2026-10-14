@@ -1,0 +1,44 @@
+[
+  {
+    "id": "column.public.Payment.refundedAmount",
+    "label": "Add column \"refundedAmount\" to \"Payment\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "refundedAmount",
+        "table": "Payment"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"refundedAmount\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "Payment",
+          "refundedAmount"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"refundedAmount\"",
+        "sql": "ALTER TABLE \"public\".\"Payment\" ADD COLUMN \"refundedAmount\" numeric(12,2)"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"refundedAmount\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "Payment",
+          "refundedAmount"
+        ]
+      }
+    ]
+  }
+]
