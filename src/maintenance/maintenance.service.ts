@@ -151,9 +151,9 @@ export class MaintenanceService {
     return { id: ticket.id, ticketNo: ticket.ticketNo, status: ticket.status };
   }
 
-  private async load(ticketId: string) {
+  private async load(ticketId: string, propertyId: string) {
     const ticket = await db.orm.public.MaintenanceTicket
-      .where({ id: brand(ticketId) })
+      .where({ id: brand(ticketId), propertyId: brand(propertyId) })
       .first();
     if (!ticket) throw new NotFoundException('Ticket not found');
     return ticket;
@@ -168,7 +168,8 @@ export class MaintenanceService {
     action: string,
     reason?: string | null,
   ) {
-    const ticket = await this.load(ticketId);
+    const property = await this.property(req);
+    const ticket = await this.load(ticketId, property.id);
     if (!allowedFrom.includes(ticket.status)) {
       throw new ConflictException(
         `Cannot move a ${ticket.status.replace(/_/g, ' ').toLowerCase()} ticket to ${next.replace(/_/g, ' ').toLowerCase()}`,
@@ -273,7 +274,10 @@ export class MaintenanceService {
       );
     }
 
-    const room = await db.orm.public.Room.where({ id: brand(roomId) }).first();
+    const property = await this.property(req);
+    const room = await db.orm.public.Room
+      .where({ id: brand(roomId), propertyId: brand(property.id) })
+      .first();
     if (!room) throw new NotFoundException('Room not found');
 
     if (back) {
@@ -334,38 +338,5 @@ export class MaintenanceService {
     });
 
     return { idempotent: false, id: room.id, roomNumber: room.roomNumber, status: 'OUT_OF_ORDER' };
-  }
-
-  /**
-   * The most recent out-of-order reason for a room, for display on the room
-   * board.
-   *
-   * Read straight from the audit trail so the reason has exactly one home. The
-   * caller needs only `room.read` for this; `audit-log.read` stays reserved for
-   * reading the log itself. Nothing guest- or money-related is returned.
-   */
-  async outOfOrderReasons(roomIds: string[]): Promise<Map<string, { reason: string; at: string }>> {
-    const out = new Map<string, { reason: string; at: string }>();
-    if (roomIds.length === 0) return out;
-
-    // AuditLog.resourceId is a nullable varchar rather than a uuid, so the
-    // filter is applied here instead of in the query.
-    const wanted = new Set(roomIds);
-    const rows = await db.orm.public.AuditLog
-      .where({ action: brand('room.out-of-order') })
-      .all();
-
-    const byRoom = new Map<string, (typeof rows)[number]>();
-    for (const r of rows) {
-      const id = r.resourceId ? String(r.resourceId) : null;
-      if (!id || !wanted.has(id)) continue;
-      const prev = byRoom.get(id);
-      if (!prev || String(r.createdAt) > String(prev.createdAt)) byRoom.set(id, r);
-    }
-
-    for (const [roomId, row] of byRoom) {
-      out.set(roomId, { reason: String(row.reason ?? ''), at: String(row.createdAt) });
-    }
-    return out;
   }
 }

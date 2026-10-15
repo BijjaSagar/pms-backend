@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -17,7 +18,9 @@ import {
   Min,
 } from 'class-validator';
 import { RequirePermissions } from '../common/decorators/access.decorator.js';
-import { ReservationsService } from './reservations.service.js';
+import { BookingClientService } from '../booking-client/booking-client.service.js';
+import { HOLD_MESSAGES, RESERVATION_MESSAGES } from '../contracts/booking.messages.js';
+import type { ActorContext } from '../contracts/shared.js';
 import type { AuthenticatedRequest } from '../common/guards/auth.guard.js';
 
 class CreateReservationDto {
@@ -30,6 +33,10 @@ class CreateReservationDto {
   @IsOptional() @IsString() roomId?: string;
   @IsOptional() @IsString() source?: string;
   @IsOptional() @IsString() @MaxLength(4000) specialRequests?: string;
+  /** The selection-time hold to convert, when the user picked a room. */
+  @IsOptional() @IsString() @MaxLength(120) holdId?: string;
+  /** Makes a retried create idempotent: a replay returns the same booking. */
+  @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
 }
 
 class AmendReservationDto {
@@ -51,9 +58,32 @@ class AssignRoomDto {
   @IsString() roomId: string;
 }
 
+class HoldDto {
+  @IsString() roomId: string;
+  @IsISO8601({ strict: true }) checkIn: string;
+  @IsISO8601({ strict: true }) checkOut: string;
+}
+
+/**
+ * Reservation and availability surface.
+ *
+ * Thin over the booking microservice: it validates the HTTP body, packages the
+ * authenticated actor, and forwards. Room holds are the selection-time lock
+ * that keeps two users from picking the same room-night.
+ */
 @Controller()
 export class ReservationsController {
-  constructor(private readonly reservations: ReservationsService) {}
+  constructor(private readonly booking: BookingClientService) {}
+
+  private actor(req: AuthenticatedRequest): ActorContext {
+    const user = req.user!;
+    return {
+      id: user.id,
+      organizationId: user.organizationId,
+      activePropertyId: user.activePropertyId,
+      permissions: user.permissions,
+    };
+  }
 
   @RequirePermissions('reservation.read')
   @Get('reservations')
@@ -70,13 +100,16 @@ export class ReservationsController {
       const n = Number(v);
       return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
     };
-    return this.reservations.list(req, {
-      status,
-      checkIn,
-      checkOut,
-      search: search?.trim() || undefined,
-      page: positiveInt(page, 1),
-      pageSize: positiveInt(pageSize, 25),
+    return this.booking.request(RESERVATION_MESSAGES.LIST, {
+      actor: this.actor(req),
+      opts: {
+        status,
+        checkIn,
+        checkOut,
+        search: search?.trim() || undefined,
+        page: positiveInt(page, 1),
+        pageSize: positiveInt(pageSize, 25),
+      },
     });
   }
 
@@ -91,34 +124,63 @@ export class ReservationsController {
     if (!checkIn || !checkOut || !roomTypeId) {
       return { error: 'checkIn, checkOut and roomTypeId are required' };
     }
-    return this.reservations.availability(
-      req.user!.activePropertyId!,
+    return this.booking.request(RESERVATION_MESSAGES.AVAILABILITY, {
+      actor: this.actor(req),
       roomTypeId,
       checkIn,
       checkOut,
-    );
+    });
+  }
+
+  /** Reserves every night for this user the moment a room is selected. */
+  @RequirePermissions('reservation.create')
+  @Post('availability/hold')
+  hold(@Body() dto: HoldDto, @Req() req: AuthenticatedRequest) {
+    return this.booking.request(HOLD_MESSAGES.ACQUIRE, {
+      actor: this.actor(req),
+      roomId: dto.roomId,
+      checkIn: dto.checkIn,
+      checkOut: dto.checkOut,
+    });
+  }
+
+  @RequirePermissions('reservation.create')
+  @Post('availability/holds/:holdId/refresh')
+  refreshHold(@Param('holdId') holdId: string, @Req() req: AuthenticatedRequest) {
+    return this.booking.request(HOLD_MESSAGES.REFRESH, { actor: this.actor(req), holdId });
+  }
+
+  @RequirePermissions('reservation.create')
+  @Delete('availability/holds/:holdId')
+  releaseHold(@Param('holdId') holdId: string, @Req() req: AuthenticatedRequest) {
+    return this.booking.request(HOLD_MESSAGES.RELEASE, { actor: this.actor(req), holdId });
   }
 
   @RequirePermissions('reservation.create')
   @Post('reservations')
   create(@Body() dto: CreateReservationDto, @Req() req: AuthenticatedRequest) {
-    return this.reservations.create(req, {
-      primaryGuestId: dto.primaryGuestId,
-      checkInDate: dto.checkInDate,
-      checkOutDate: dto.checkOutDate,
-      adults: dto.adults,
-      children: dto.children,
-      roomTypeId: dto.roomTypeId,
-      roomId: dto.roomId ?? null,
-      source: dto.source ?? 'DIRECT',
-      notes: dto.specialRequests ?? null,
+    return this.booking.request(RESERVATION_MESSAGES.CREATE, {
+      actor: this.actor(req),
+      input: {
+        primaryGuestId: dto.primaryGuestId,
+        checkInDate: dto.checkInDate,
+        checkOutDate: dto.checkOutDate,
+        adults: dto.adults,
+        children: dto.children,
+        roomTypeId: dto.roomTypeId,
+        roomId: dto.roomId ?? null,
+        source: dto.source ?? 'DIRECT',
+        notes: dto.specialRequests ?? null,
+        holdId: dto.holdId ?? null,
+        idempotencyKey: dto.idempotencyKey ?? null,
+      },
     });
   }
 
   @RequirePermissions('reservation.read')
   @Get('reservations/:id')
   detail(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    return this.reservations.detail(req, id);
+    return this.booking.request(RESERVATION_MESSAGES.DETAIL, { actor: this.actor(req), id });
   }
 
   @RequirePermissions('reservation.update')
@@ -128,7 +190,11 @@ export class ReservationsController {
     @Body() dto: AmendReservationDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    return this.reservations.update(req, id, dto);
+    return this.booking.request(RESERVATION_MESSAGES.UPDATE, {
+      actor: this.actor(req),
+      id,
+      body: dto,
+    });
   }
 
   @RequirePermissions('reservation.assign-room')
@@ -138,7 +204,11 @@ export class ReservationsController {
     @Body() dto: AssignRoomDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    return this.reservations.assignRoom(req, id, dto.roomId);
+    return this.booking.request(RESERVATION_MESSAGES.ASSIGN_ROOM, {
+      actor: this.actor(req),
+      id,
+      roomId: dto.roomId,
+    });
   }
 
   @RequirePermissions('reservation.cancel')
@@ -148,6 +218,10 @@ export class ReservationsController {
     @Body() dto: CancelReservationDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    return this.reservations.cancel(req, id, dto.reason);
+    return this.booking.request(RESERVATION_MESSAGES.CANCEL, {
+      actor: this.actor(req),
+      id,
+      reason: dto.reason,
+    });
   }
 }

@@ -3769,6 +3769,16 @@
                   "kind": "scalar"
                 }
               },
+              "idempotencyKey": {
+                "nullable": true,
+                "type": {
+                  "codecId": "sql/varchar@1",
+                  "kind": "scalar",
+                  "typeParams": {
+                    "length": 120
+                  }
+                }
+              },
               "primaryGuestId": {
                 "nullable": false,
                 "type": {
@@ -3974,6 +3984,9 @@
                 },
                 "id": {
                   "column": "id"
+                },
+                "idempotencyKey": {
+                  "column": "idempotencyKey"
                 },
                 "primaryGuestId": {
                   "column": "primaryGuestId"
@@ -4705,6 +4718,33 @@
                   }
                 }
               },
+              "holdExpiresAt": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamp-string@1",
+                  "kind": "scalar",
+                  "typeParams": {
+                    "precision": 3
+                  }
+                }
+              },
+              "holdToken": {
+                "nullable": true,
+                "type": {
+                  "codecId": "sql/varchar@1",
+                  "kind": "scalar",
+                  "typeParams": {
+                    "length": 120
+                  }
+                }
+              },
+              "holdUserId": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/uuid@1",
+                  "kind": "scalar"
+                }
+              },
               "id": {
                 "nullable": false,
                 "type": {
@@ -4713,7 +4753,7 @@
                 }
               },
               "reservationRoomId": {
-                "nullable": false,
+                "nullable": true,
                 "type": {
                   "codecId": "pg/uuid@1",
                   "kind": "scalar"
@@ -4737,7 +4777,7 @@
             "relations": {
               "reservationRoom": {
                 "cardinality": "N:1",
-                "nullable": false,
+                "nullable": true,
                 "on": {
                   "localFields": [
                     "reservationRoomId"
@@ -4772,6 +4812,15 @@
               "fields": {
                 "createdAt": {
                   "column": "createdAt"
+                },
+                "holdExpiresAt": {
+                  "column": "holdExpiresAt"
+                },
+                "holdToken": {
+                  "column": "holdToken"
+                },
+                "holdUserId": {
+                  "column": "holdUserId"
                 },
                 "id": {
                   "column": "id"
@@ -9110,6 +9159,14 @@
                   "dataType": "pg/uuid",
                   "nullable": false
                 },
+                "idempotencyKey": {
+                  "codecId": "sql/varchar@1",
+                  "dataType": "pg/varchar",
+                  "nullable": true,
+                  "typeParams": {
+                    "length": 120
+                  }
+                },
                 "primaryGuestId": {
                   "codecId": "pg/uuid@1",
                   "dataType": "pg/uuid",
@@ -9272,6 +9329,13 @@
                 }
               ],
               "indexes": [
+                {
+                  "columns": [
+                    "idempotencyKey"
+                  ],
+                  "name": "Reservation_idempotencyKey_key",
+                  "unique": true
+                },
                 {
                   "columns": [
                     "primaryGuestId",
@@ -9906,6 +9970,27 @@
                     "precision": 3
                   }
                 },
+                "holdExpiresAt": {
+                  "codecId": "pg/timestamp-string@1",
+                  "dataType": "pg/timestamp",
+                  "nullable": true,
+                  "typeParams": {
+                    "precision": 3
+                  }
+                },
+                "holdToken": {
+                  "codecId": "sql/varchar@1",
+                  "dataType": "pg/varchar",
+                  "nullable": true,
+                  "typeParams": {
+                    "length": 120
+                  }
+                },
+                "holdUserId": {
+                  "codecId": "pg/uuid@1",
+                  "dataType": "pg/uuid",
+                  "nullable": true
+                },
                 "id": {
                   "codecId": "pg/uuid@1",
                   "dataType": "pg/uuid",
@@ -9914,7 +9999,7 @@
                 "reservationRoomId": {
                   "codecId": "pg/uuid@1",
                   "dataType": "pg/uuid",
-                  "nullable": false
+                  "nullable": true
                 },
                 "roomId": {
                   "codecId": "pg/uuid@1",
@@ -9972,6 +10057,13 @@
                 }
               ],
               "indexes": [
+                {
+                  "columns": [
+                    "holdExpiresAt"
+                  ],
+                  "name": "RoomNightInventory_holdExpiresAt_idx",
+                  "unique": false
+                },
                 {
                   "columns": [
                     "reservationRoomId",
@@ -10937,7 +11029,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "f062fa703dde8284abddd2faf2297c4526f3076b0292525272cf5bada03f8728"
+    "storageHash": "79388c46b023b73ce5279e12714a73f3df2806bf611ff77f96e10cd15372b2d1"
   },
   "execution": {
     "executionHash": "abb538ea2d325364bb7741633f32e543cda2b267ede336660885b857b0a44eba",

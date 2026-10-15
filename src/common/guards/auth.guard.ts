@@ -6,7 +6,9 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_ROUTE } from '../decorators/access.decorator.js';
-import { AuthService, SESSION_COOKIE } from '../../auth/auth.service.js';
+import { SESSION_COOKIE } from '../auth.constants.js';
+import { AuthClientService } from '../../auth-client/auth-client.service.js';
+import { AUTH_MESSAGES, type PrincipalResult } from '../../contracts/auth.messages.js';
 import type { Request } from 'express';
 
 export interface AuthenticatedUser {
@@ -28,12 +30,18 @@ export interface AuthenticatedRequest extends Request {
  * Runs before PermissionsGuard so that guard only ever sees a user that came
  * from trusted server-side session resolution. Honours @Public(), which is what
  * makes login, health and password-reset reachable without a session.
+ *
+ * Session resolution and permission lookup now happen in the auth microservice,
+ * so this is a single transport round-trip that returns both. Permissions are
+ * still resolved per request from the current membership, so a role change or
+ * deactivation takes effect immediately rather than waiting for a stale session
+ * claim to expire.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly auth: AuthService,
+    private readonly authClient: AuthClientService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -44,24 +52,20 @@ export class AuthGuard implements CanActivate {
     const req = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = req.cookies?.[SESSION_COOKIE];
 
-    const principal = await this.auth.resolveSession(token);
-    if (!principal) {
+    const resolved = await this.authClient.request<PrincipalResult | null>(
+      AUTH_MESSAGES.PRINCIPAL,
+      { token },
+    );
+    if (!resolved) {
       throw new UnauthorizedException();
     }
 
-    // Permissions are resolved per request from the current membership so a
-    // role change or deactivation takes effect immediately rather than waiting
-    // for a stale session claim to expire.
-    const permissions = principal.activePropertyId
-      ? await this.auth.permissionsForProperty(principal.userId, principal.activePropertyId)
-      : [];
-
     req.user = {
-      id: principal.userId,
-      organizationId: principal.organizationId,
-      activePropertyId: principal.activePropertyId,
-      sessionId: principal.sessionId,
-      permissions,
+      id: resolved.principal.userId,
+      organizationId: resolved.principal.organizationId,
+      activePropertyId: resolved.principal.activePropertyId,
+      sessionId: resolved.principal.sessionId,
+      permissions: resolved.permissions,
       isActive: true,
     };
     return true;

@@ -11,6 +11,7 @@ import {
 import { RequirePermissions } from '../common/decorators/access.decorator.js';
 import { db } from '../prisma/db.js';
 import { brand, json } from '../prisma/compat.js';
+import { latestOutOfOrderReasons } from '../common/room-status.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthenticatedRequest } from '../common/guards/auth.guard.js';
 
@@ -171,6 +172,12 @@ export class InventoryController {
       .all();
     const typeById = new Map(types.map((t) => [t.id, t]));
 
+    // Out-of-order reasons are surfaced on the row so the board can say why a
+    // room is blocked without a second round trip.
+    const oosReasons = await latestOutOfOrderReasons(
+      rooms.filter((r) => r.status === 'OUT_OF_ORDER').map((r) => r.id),
+    );
+
     return rooms
       .map((r) => ({
         id: r.id,
@@ -183,6 +190,7 @@ export class InventoryController {
         roomTypeId: r.roomTypeId,
         roomTypeCode: typeById.get(r.roomTypeId)?.code ?? null,
         roomTypeName: typeById.get(r.roomTypeId)?.name ?? null,
+        outOfOrderReason: r.status === 'OUT_OF_ORDER' ? oosReasons.get(r.id)?.reason ?? null : null,
       }))
       .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber));
   }

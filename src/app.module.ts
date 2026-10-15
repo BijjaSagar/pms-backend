@@ -6,6 +6,9 @@ import { HealthController } from './health/health.controller.js';
 import { AppConfigModule } from './config/config.module.js';
 import { AuditModule } from './audit/audit.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { AuthClientModule } from './auth-client/auth-client.module.js';
+import { BookingClientModule } from './booking-client/booking-client.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 import { AuthGuard } from './common/guards/auth.guard.js';
 import { PermissionsGuard } from './common/guards/permissions.guard.js';
 import { PropertyModule } from './properties/properties.module.js';
@@ -30,6 +33,13 @@ import { UsersModule } from './users/users.module.js';
     AppConfigModule,
     DatabaseModule,
     AuditModule,
+    // Global client handle on the auth microservice; the session guard and the
+    // auth/users controllers reach it without importing it themselves.
+    AuthClientModule,
+    // Global client handle on the booking microservice plus the live
+    // availability stream (SSE) that pushes room holds to other browsers.
+    BookingClientModule,
+    RealtimeModule,
     AuthModule,
     PropertyModule,
     GuestReservationModule,

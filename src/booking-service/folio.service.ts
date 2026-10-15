@@ -12,6 +12,7 @@ import { computeTotals, fromDecimal, toDecimal, type TaxRule } from '../common/m
 import { activeTaxRules } from '../common/tax-rules.js';
 import { splitLedger } from '../common/ledger.js';
 import { AuditService } from '../audit/audit.service.js';
+import type { ActorContext } from '../contracts/shared.js';
 
 export interface Balance {
   charges: string;
@@ -388,7 +389,7 @@ export class FolioService {
    * the reversal exists for the audit trail, not as a second deduction.
    */
   async voidItem(
-    req: any,
+    actor: ActorContext,
     itemId: string,
     reason: string,
   ) {
@@ -428,16 +429,16 @@ export class FolioService {
         // Flagged as voided so the pair nets to nothing. The reversal is a
         // record of what happened, not a second charge.
         totalAmount: brand(String(item.totalAmount)),
-        postedById: brand(req.user?.id ?? null),
+        postedById: brand(actor.id ?? null),
         reason: brand(trimmed),
         isVoided: brand(true),
       });
 
       await this.audit.record(
         {
-          organizationId: req.user?.organizationId,
+          organizationId: actor.organizationId,
           propertyId,
-          actorUserId: req.user?.id,
+          actorUserId: actor.id,
           action: 'folio.item.void',
           resourceType: 'FolioItem',
           resourceId: item.id,
@@ -458,7 +459,7 @@ export class FolioService {
 
   // ----------------------------------------------------------- close & reopen
 
-  async close(req: any, folioId: string) {
+  async close(actor: ActorContext, folioId: string) {
     const folio = await db.orm.public.Folio.where({ id: brand(folioId) }).first();
     if (!folio) throw new NotFoundException('Folio not found');
     if (folio.status === 'CLOSED') {
@@ -477,9 +478,9 @@ export class FolioService {
       });
       await this.audit.record(
         {
-          organizationId: req.user?.organizationId,
+          organizationId: actor.organizationId,
           propertyId: folio.propertyId,
-          actorUserId: req.user?.id,
+          actorUserId: actor.id,
           action: 'folio.close',
           resourceType: 'Folio',
           resourceId: folio.id,
@@ -499,7 +500,7 @@ export class FolioService {
    * may already hold; reopening the folio would let the two drift apart, and the
    * invoice is the artefact that must be withdrawn first.
    */
-  async reopen(req: any, folioId: string, reason: string) {
+  async reopen(actor: ActorContext, folioId: string, reason: string) {
     const trimmed = reason?.trim();
     if (!trimmed) throw new BadRequestException('A reopen requires a reason');
 
@@ -528,9 +529,9 @@ export class FolioService {
       });
       await this.audit.record(
         {
-          organizationId: req.user?.organizationId,
+          organizationId: actor.organizationId,
           propertyId: folio.propertyId,
-          actorUserId: req.user?.id,
+          actorUserId: actor.id,
           action: 'folio.reopen',
           resourceType: 'Folio',
           resourceId: folio.id,
@@ -553,7 +554,7 @@ export class FolioService {
    * already" is one column read rather than a sum over child rows, and so a
    * second refund cannot exceed what is left.
    */
-  async refund(req: any, paymentId: string, amount: string, reason: string) {
+  async refund(actor: ActorContext, paymentId: string, amount: string, reason: string) {
     const trimmed = reason?.trim();
     if (!trimmed) throw new BadRequestException('A refund requires a reason');
 
@@ -601,9 +602,9 @@ export class FolioService {
 
       await this.audit.record(
         {
-          organizationId: req.user?.organizationId,
+          organizationId: actor.organizationId,
           propertyId: folio?.propertyId,
-          actorUserId: req.user?.id,
+          actorUserId: actor.id,
           action: 'payment.refund',
           resourceType: 'Payment',
           resourceId: payment.id,
@@ -630,8 +631,8 @@ export class FolioService {
   }
 
   /** Refuses an operation the caller lacks the permission for. */
-  requirePermission(req: any, permission: string, what: string): void {
-    if (!(req.user?.permissions ?? []).includes(permission)) {
+  requirePermission(actor: ActorContext, permission: string, what: string): void {
+    if (!(actor.permissions ?? []).includes(permission)) {
       throw new ForbiddenException(`You do not have permission to ${what}.`);
     }
   }

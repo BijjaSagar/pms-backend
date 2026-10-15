@@ -18,37 +18,23 @@ import {
 } from '../common/dates.js';
 import { fromDecimal, toDecimal } from '../common/money.js';
 import { activeTaxRules, estimateStay } from '../common/tax-rules.js';
+import type { ActorContext } from '../contracts/shared.js';
+import type { CreateReservationInput, ReservationListOptions } from '../contracts/booking.messages.js';
+import { RoomHoldService } from './room-hold.service.js';
+import { isUniqueViolation, UNIQUE } from '../common/db-errors.js';
 
-/** Postgres unique_violation. The constraint name tells us which guarantee fired. */
-function isUniqueViolation(err: unknown, constraint: string): boolean {
-  const e = err as { code?: string; message?: string } | null;
-  if (!e) return false;
-  return (
-    e.code === '23505' && typeof e.message === 'string' && e.message.includes(constraint)
-  );
-}
-
-const ROOM_NIGHT_UNIQUE = 'RoomNightInventory_roomId_stayDate_key';
-const BOOKING_CODE_UNIQUE = 'Reservation_propertyId_bookingCode_key';
-
-export interface CreateReservationInput {
-  primaryGuestId: string;
-  checkInDate: DateOnly;
-  checkOutDate: DateOnly;
-  adults: number;
-  children: number;
-  roomTypeId: string;
-  roomId?: string | null;
-  source?: string;
-  notes?: string | null;
-}
+const ROOM_NIGHT_UNIQUE = UNIQUE.ROOM_NIGHT;
+const BOOKING_CODE_UNIQUE = UNIQUE.BOOKING_CODE;
 
 @Injectable()
 export class ReservationsService {
-  constructor(private readonly audit: AuditService) {}
+  constructor(
+    private readonly audit: AuditService,
+    private readonly holds: RoomHoldService,
+  ) {}
 
-  private async activeProperty(req: { user?: any }): Promise<any> {
-    const propertyId = req.user?.activePropertyId;
+  private async activeProperty(actor: ActorContext): Promise<any> {
+    const propertyId = actor.activePropertyId;
     if (!propertyId) throw new BadRequestException('Select an active property first');
     const property = await db.orm.public.Property.where({ id: brand(propertyId) }).first();
     if (!property) throw new BadRequestException('Active property not found');
@@ -68,9 +54,13 @@ export class ReservationsService {
    *
    * This is a preview for the UI only. The authoritative check is the unique
    * constraint applied during the save transaction, because a preview result
-   * can always be stale by the time the user submits.
+   * can always be stale by the time the user submits. Rooms currently held by
+   * *another* user are excluded so the picker reflects a room someone else is
+   * already booking; the caller's own holds remain selectable.
    */
-  async availability(propertyId: string, roomTypeId: string, checkIn: DateOnly, checkOut: DateOnly) {
+  async availability(actor: ActorContext, roomTypeId: string, checkIn: DateOnly, checkOut: DateOnly) {
+    const propertyId = actor.activePropertyId;
+    if (!propertyId) throw new BadRequestException('Select an active property first');
     validateStay(checkIn, checkOut);
     const nights = enumerateNights(checkIn, checkOut);
 
@@ -81,20 +71,13 @@ export class ReservationsService {
     const usable = rooms.filter((r) => r.status !== 'OUT_OF_ORDER');
     if (usable.length === 0) return { nights, available: [], totalRooms: 0 };
 
-    const taken = await db.orm.public.RoomNightInventory
-      .where((m) => m.roomId.in(usable.map((r) => r.id)))
-      .all();
-    const takenByRoom = new Map<string, Set<string>>();
-    for (const t of taken) {
-      if (!takenByRoom.has(t.roomId)) takenByRoom.set(t.roomId, new Set());
-      takenByRoom.get(t.roomId)!.add(String(t.stayDate));
-    }
+    const unavailable = await this.holds.unavailableRooms(usable.map((r) => r.id), nights, actor.id);
 
     return {
       nights,
       totalRooms: usable.length,
       available: usable
-        .filter((r) => !nights.some((n) => takenByRoom.get(r.id)?.has(n)))
+        .filter((r) => !unavailable.has(r.id))
         .map((r) => ({
           id: r.id,
           roomNumber: r.roomNumber,
@@ -110,18 +93,39 @@ export class ReservationsService {
    * Room-night allocation happens inside this same transaction, so a reservation
    * can never exist without its allocations, and a lost allocation race rolls
    * the whole reservation back rather than leaving an orphaned booking.
+   *
+   * A `holdId` from the selection step is consumed on success; a room held by
+   * another user is refused up front so a direct call cannot jump the queue.
    */
-  async create(req: any, input: CreateReservationInput) {
-    const property = await this.activeProperty(req);
+  async create(actor: ActorContext, input: CreateReservationInput) {
+    const property = await this.activeProperty(actor);
     try {
-      validateStay(input.checkInDate, input.checkOutDate);
+      validateStay(input.checkInDate as DateOnly, input.checkOutDate as DateOnly);
     } catch (e) {
       if (e instanceof InvalidStayError) throw new BadRequestException(e.message);
       throw e;
     }
 
+    // A physical room is required: a booking with no room writes no inventory
+    // and could oversell the room type.
+    if (!input.roomId) {
+      throw new BadRequestException('Select a room before confirming the booking');
+    }
+    // The selection-time hold is the credential that reserves the nights.
+    if (!input.holdId) {
+      throw new BadRequestException('Select the room to hold it before confirming the booking');
+    }
+
+    // Idempotency: a replayed request returns the booking it already created.
+    if (input.idempotencyKey) {
+      const existing = await db.orm.public.Reservation
+        .where({ idempotencyKey: brand(input.idempotencyKey) })
+        .first();
+      if (existing) return this.shapeReservation(existing, true);
+    }
+
     const guest = await db.orm.public.Guest
-      .where({ id: brand(input.primaryGuestId), organizationId: brand(req.user.organizationId) })
+      .where({ id: brand(input.primaryGuestId), organizationId: brand(actor.organizationId) })
       .first();
     if (!guest) throw new NotFoundException('Guest not found');
 
@@ -143,7 +147,17 @@ export class ReservationsService {
       }
     }
 
-    const nights = enumerateNights(input.checkInDate, input.checkOutDate);
+    const nights = enumerateNights(input.checkInDate as DateOnly, input.checkOutDate as DateOnly);
+
+    // A room another user is holding or has booked is refused before the write,
+    // so the second user gets a clear message rather than losing a race.
+    const unavailable = await this.holds.unavailableRooms([input.roomId], nights, actor.id);
+    if (unavailable.has(input.roomId)) {
+      throw new ConflictException(
+        'That room is no longer available for these nights. Choose another room.',
+      );
+    }
+
     // RatePlan rows exist for future plan-based pricing, but the booking flow
     // does not select a plan yet, so the nightly rate comes from the room
     // type's base rate. The snapshot is written now so a later rate change
@@ -160,101 +174,117 @@ export class ReservationsService {
     const taxTotal = toDecimal(estimate.taxTotal);
     const total = toDecimal(estimate.grandTotal);
 
-    try {
-      return await db.transaction(async (tx: any) => {
-        let reservation = null;
-        for (let attempt = 0; attempt < 5 && !reservation; attempt++) {
-          try {
-            reservation = await tx.orm.public.Reservation.create({
-              propertyId: brand(property.id),
-              bookingCode: brand(this.newBookingCode()),
-              status: brand('CONFIRMED'),
-              source: brand(input.source ?? 'DIRECT'),
-              primaryGuestId: brand(input.primaryGuestId),
-              createdById: brand(req.user.id),
-              checkInDate: brand(input.checkInDate),
-              checkOutDate: brand(input.checkOutDate),
-              adults: brand(input.adults),
-              children: brand(input.children),
-              currencyCode: brand(property.currencyCode),
-              subtotal: brand(subtotal),
-              taxTotal: brand(taxTotal),
-              totalAmount: brand(total),
-              specialRequests: brand(input.notes ?? null),
-            });
-          } catch (e) {
-            if (isUniqueViolation(e, BOOKING_CODE_UNIQUE)) continue;
-            throw e;
-          }
+    const created = await db.transaction(async (tx: any) => {
+      let reservation = null;
+      for (let attempt = 0; attempt < 5 && !reservation; attempt++) {
+        try {
+          reservation = await tx.orm.public.Reservation.create({
+            propertyId: brand(property.id),
+            bookingCode: brand(this.newBookingCode()),
+            status: brand('CONFIRMED'),
+            source: brand(input.source ?? 'DIRECT'),
+            primaryGuestId: brand(input.primaryGuestId),
+            createdById: brand(actor.id),
+            checkInDate: brand(input.checkInDate),
+            checkOutDate: brand(input.checkOutDate),
+            adults: brand(input.adults),
+            children: brand(input.children),
+            currencyCode: brand(property.currencyCode),
+            subtotal: brand(subtotal),
+            taxTotal: brand(taxTotal),
+            totalAmount: brand(total),
+            specialRequests: brand(input.notes ?? null),
+            idempotencyKey: brand(input.idempotencyKey ?? null),
+          });
+        } catch (e) {
+          if (isUniqueViolation(e, BOOKING_CODE_UNIQUE)) continue;
+          throw e;
         }
-        if (!reservation) throw new ConflictException('Could not allocate a booking code');
+      }
+      if (!reservation) throw new ConflictException('Could not allocate a booking code');
 
-        const reservationRoom = await tx.orm.public.ReservationRoom.create({
-          reservationId: brand(reservation.id),
-          roomTypeId: brand(roomType.id),
-          roomId: brand(input.roomId ?? null),
-          adults: brand(input.adults),
-          children: brand(input.children),
-          nightlyRate: brand(toDecimal(nightlyRate)),
-          ratePlanName: brand(null),
-        });
-
-        if (input.roomId) {
-          try {
-            for (const night of nights) {
-              await tx.orm.public.RoomNightInventory.create({
-                roomId: brand(input.roomId),
-                reservationRoomId: brand(reservationRoom.id),
-                stayDate: brand(night),
-                createdAt: ts(new Date()),
-              });
-            }
-          } catch (e) {
-            // The database is the authority on availability, not the preview.
-            if (isUniqueViolation(e, ROOM_NIGHT_UNIQUE)) {
-              throw new ConflictException(
-                'Room availability changed; refresh and choose another room.',
-              );
-            }
-            throw e;
-          }
-        }
-
-        await this.audit.record(
-          {
-            organizationId: req.user.organizationId,
-            propertyId: property.id,
-            actorUserId: req.user.id,
-            action: 'reservation.create',
-            resourceType: 'Reservation',
-            resourceId: reservation.id,
-            outcome: 'SUCCESS',
-            metadata: { bookingCode: reservation.bookingCode, nights: nights.length },
-          },
-          tx,
-        );
-
-        return {
-          id: reservation.id,
-          bookingCode: reservation.bookingCode,
-          status: reservation.status,
-          checkInDate: reservation.checkInDate,
-          checkOutDate: reservation.checkOutDate,
-          nights: nights.length,
-          subtotal,
-          taxTotal,
-          totalAmount: total,
-          currencyCode: reservation.currencyCode,
-          roomAssigned: !!input.roomId,
-        };
+      const reservationRoom = await tx.orm.public.ReservationRoom.create({
+        reservationId: brand(reservation.id),
+        roomTypeId: brand(roomType.id),
+        roomId: brand(input.roomId ?? null),
+        adults: brand(input.adults),
+        children: brand(input.children),
+        nightlyRate: brand(toDecimal(nightlyRate)),
+        ratePlanName: brand(null),
       });
-    } catch (e) {
-      if (e instanceof ConflictException) throw e;
+
+      // Convert the caller's live hold into permanent inventory inside this
+      // transaction. This validates the hold (ownership, expiry, exact dates)
+      // and claims the nights atomically — a stale token throws and rolls the
+      // whole booking back.
+      await this.holds.convert(tx, actor, input.holdId!, reservationRoom.id, nights);
+
+      await this.audit.record(
+        {
+          organizationId: actor.organizationId,
+          propertyId: property.id,
+          actorUserId: actor.id,
+          action: 'reservation.create',
+          resourceType: 'Reservation',
+          resourceId: reservation.id,
+          outcome: 'SUCCESS',
+          metadata: { bookingCode: reservation.bookingCode, nights: nights.length },
+        },
+        tx,
+      );
+
+      return {
+        id: reservation.id,
+        bookingCode: reservation.bookingCode,
+        status: reservation.status,
+        checkInDate: reservation.checkInDate,
+        checkOutDate: reservation.checkOutDate,
+        nights: nights.length,
+        subtotal,
+        taxTotal,
+        totalAmount: total,
+        currencyCode: reservation.currencyCode,
+        roomAssigned: true,
+        idempotent: false,
+      };
+    }).catch(async (e: unknown) => {
+      // A concurrent duplicate carrying the same idempotency key: return the
+      // booking the winner already created rather than a second reservation.
+      if (input.idempotencyKey && isUniqueViolation(e, UNIQUE.IDEMPOTENCY_KEY)) {
+        const existing = await db.orm.public.Reservation
+          .where({ idempotencyKey: brand(input.idempotencyKey) })
+          .first();
+        if (existing) return this.shapeReservation(existing, true);
+      }
       throw e;
+    });
+
+    // Announce the confirmed booking once the inventory rows are committed.
+    if (!created.idempotent) {
+      await this.holds.afterBooked(actor, input.roomId ?? null, nights);
     }
+    return created;
   }
 
-  async assignRoom(req: any, reservationId: string, roomId: string) {
+  /** Shapes a stored reservation for the create / idempotent-replay response. */
+  private shapeReservation(reservation: any, idempotent = false) {
+    return {
+      id: reservation.id,
+      bookingCode: reservation.bookingCode,
+      status: reservation.status,
+      checkInDate: reservation.checkInDate,
+      checkOutDate: reservation.checkOutDate,
+      nights: nightCount(String(reservation.checkInDate), String(reservation.checkOutDate)),
+      subtotal: String(reservation.subtotal),
+      taxTotal: String(reservation.taxTotal),
+      totalAmount: String(reservation.totalAmount),
+      currencyCode: reservation.currencyCode,
+      roomAssigned: true,
+      idempotent,
+    };
+  }
+
+  async assignRoom(actor: ActorContext, reservationId: string, roomId: string) {
     // The ValidationPipe can hand through a non-string when the body shape is
     // unexpected, and a coerced object reaches Postgres as "[object Object]".
     // Failing loudly here beats an opaque driver error.
@@ -265,7 +295,7 @@ export class ReservationsService {
       throw new BadRequestException('reservation id must be a non-empty string');
     }
 
-    const property = await this.activeProperty(req);
+    const property = await this.activeProperty(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -295,55 +325,57 @@ export class ReservationsService {
       String(reservation.checkOutDate),
     );
 
-    try {
-      return await db.transaction(async (tx: any) => {
-        // Free any previous allocation before claiming the new room.
-        await tx.orm.public.RoomNightInventory
-          .where({ reservationRoomId: brand(rr.id) })
-          .deleteAll();
-
-        for (const night of nights) {
-          try {
-            await tx.orm.public.RoomNightInventory.create({
-              roomId: brand(room.id),
-              reservationRoomId: brand(rr.id),
-              stayDate: brand(night),
-              createdAt: ts(new Date()),
-            });
-          } catch (e) {
-            if (isUniqueViolation(e, ROOM_NIGHT_UNIQUE)) {
-              throw new ConflictException(
-                'Room availability changed; refresh and choose another room.',
-              );
-            }
-            throw e;
-          }
-        }
-
-        await tx.orm.public.ReservationRoom
-          .where({ id: brand(rr.id) })
-          .update({ roomId: brand(room.id) });
-
-        await this.audit.record(
-          {
-            organizationId: req.user.organizationId,
-            propertyId: property.id,
-            actorUserId: req.user.id,
-            action: 'reservation.assign_room',
-            resourceType: 'Reservation',
-            resourceId: reservationId,
-            outcome: 'SUCCESS',
-            metadata: { roomId: room.id, nights: nights.length },
-          },
-          tx,
-        );
-
-        return { reservationId, roomId: room.id, roomNumber: room.roomNumber, nights: nights.length };
-      });
-    } catch (e) {
-      if (e instanceof ConflictException) throw e;
-      throw e;
+    const unavailable = await this.holds.unavailableRooms([room.id], nights, actor.id);
+    if (unavailable.has(room.id)) {
+      throw new ConflictException(
+        'That room is no longer available for these nights. Choose another room.',
+      );
     }
+
+    return db.transaction(async (tx: any) => {
+      // Free any previous allocation before claiming the new room.
+      await tx.orm.public.RoomNightInventory
+        .where({ reservationRoomId: brand(rr.id) })
+        .deleteAll();
+
+      for (const night of nights) {
+        try {
+          await tx.orm.public.RoomNightInventory.create({
+            roomId: brand(room.id),
+            reservationRoomId: brand(rr.id),
+            stayDate: brand(night),
+            createdAt: ts(new Date()),
+          });
+        } catch (e) {
+          if (isUniqueViolation(e, ROOM_NIGHT_UNIQUE)) {
+            throw new ConflictException(
+              'Room availability changed; refresh and choose another room.',
+            );
+          }
+          throw e;
+        }
+      }
+
+      await tx.orm.public.ReservationRoom
+        .where({ id: brand(rr.id) })
+        .update({ roomId: brand(room.id) });
+
+      await this.audit.record(
+        {
+          organizationId: actor.organizationId,
+          propertyId: property.id,
+          actorUserId: actor.id,
+          action: 'reservation.assign_room',
+          resourceType: 'Reservation',
+          resourceId: reservationId,
+          outcome: 'SUCCESS',
+          metadata: { roomId: room.id, nights: nights.length },
+        },
+        tx,
+      );
+
+      return { reservationId, roomId: room.id, roomNumber: room.roomNumber, nights: nights.length };
+    });
   }
 
   /**
@@ -351,8 +383,8 @@ export class ReservationsService {
    * one transaction, and the stored estimate is recomputed at the reservation's
    * own snapshot rate.
    */
-  async update(req: any, reservationId: string, body: any) {
-    const property = await this.activeProperty(req);
+  async update(actor: ActorContext, reservationId: string, body: any) {
+    const property = await this.activeProperty(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -395,91 +427,86 @@ export class ReservationsService {
 
     const datesChanged = checkIn !== reservation.checkInDate || checkOut !== reservation.checkOutDate;
 
-    try {
-      return await db.transaction(async (tx: any) => {
-        if (datesChanged) {
-          await tx.orm.public.RoomNightInventory
-            .where({ reservationRoomId: brand(rr.id) })
-            .deleteAll();
+    return db.transaction(async (tx: any) => {
+      if (datesChanged) {
+        await tx.orm.public.RoomNightInventory
+          .where({ reservationRoomId: brand(rr.id) })
+          .deleteAll();
 
-          if (rr.roomId) {
-            for (const night of nights) {
-              try {
-                await tx.orm.public.RoomNightInventory.create({
-                  roomId: brand(rr.roomId!),
-                  reservationRoomId: brand(rr.id),
-                  stayDate: brand(night),
-                  createdAt: ts(new Date()),
-                });
-              } catch (e) {
-                if (isUniqueViolation(e, ROOM_NIGHT_UNIQUE)) {
-                  throw new ConflictException(
-                    'The amended dates clash with another booking for that room.',
-                  );
-                }
-                throw e;
+        if (rr.roomId) {
+          for (const night of nights) {
+            try {
+              await tx.orm.public.RoomNightInventory.create({
+                roomId: brand(rr.roomId!),
+                reservationRoomId: brand(rr.id),
+                stayDate: brand(night),
+                createdAt: ts(new Date()),
+              });
+            } catch (e) {
+              if (isUniqueViolation(e, ROOM_NIGHT_UNIQUE)) {
+                throw new ConflictException(
+                  'The amended dates clash with another booking for that room.',
+                );
               }
+              throw e;
             }
           }
         }
+      }
 
-        const patch: Record<string, never> = {
-          checkInDate: brand(checkIn),
-          checkOutDate: brand(checkOut),
-          subtotal: brand(subtotal),
-          taxTotal: brand(taxTotal),
-          totalAmount: brand(total),
-        };
-        if (body.adults !== undefined) patch['adults'] = brand(body.adults);
-        if (body.children !== undefined) patch['children'] = brand(body.children);
-        if (body.specialRequests !== undefined) patch['specialRequests'] = brand(body.specialRequests);
+      const patch: Record<string, never> = {
+        checkInDate: brand(checkIn),
+        checkOutDate: brand(checkOut),
+        subtotal: brand(subtotal),
+        taxTotal: brand(taxTotal),
+        totalAmount: brand(total),
+      };
+      if (body.adults !== undefined) patch['adults'] = brand(body.adults);
+      if (body.children !== undefined) patch['children'] = brand(body.children);
+      if (body.specialRequests !== undefined) patch['specialRequests'] = brand(body.specialRequests);
 
-        await tx.orm.public.Reservation.where({ id: brand(reservationId) }).update(patch);
-        if (body.adults !== undefined || body.children !== undefined) {
-          await tx.orm.public.ReservationRoom.where({ id: brand(rr.id) }).update({
-            adults: brand(body.adults ?? rr.adults),
-            children: brand(body.children ?? rr.children),
-          });
-        }
+      await tx.orm.public.Reservation.where({ id: brand(reservationId) }).update(patch);
+      if (body.adults !== undefined || body.children !== undefined) {
+        await tx.orm.public.ReservationRoom.where({ id: brand(rr.id) }).update({
+          adults: brand(body.adults ?? rr.adults),
+          children: brand(body.children ?? rr.children),
+        });
+      }
 
-        await this.audit.record(
-          {
-            organizationId: req.user.organizationId,
-            propertyId: property.id,
-            actorUserId: req.user.id,
-            action: 'reservation.update',
-            resourceType: 'Reservation',
-            resourceId: reservationId,
-            outcome: 'SUCCESS',
-            metadata: {
-              datesChanged,
-              previousCheckIn: reservation.checkInDate,
-              previousCheckOut: reservation.checkOutDate,
-            },
+      await this.audit.record(
+        {
+          organizationId: actor.organizationId,
+          propertyId: property.id,
+          actorUserId: actor.id,
+          action: 'reservation.update',
+          resourceType: 'Reservation',
+          resourceId: reservationId,
+          outcome: 'SUCCESS',
+          metadata: {
+            datesChanged,
+            previousCheckIn: reservation.checkInDate,
+            previousCheckOut: reservation.checkOutDate,
           },
-          tx,
-        );
+        },
+        tx,
+      );
 
-        return {
-          id: reservationId,
-          checkInDate: checkIn,
-          checkOutDate: checkOut,
-          nights: nights.length,
-          subtotal,
-          taxTotal,
-          totalAmount: total,
-          roomReallocated: datesChanged && !!rr.roomId,
-        };
-      });
-    } catch (e) {
-      if (e instanceof ConflictException) throw e;
-      throw e;
-    }
+      return {
+        id: reservationId,
+        checkInDate: checkIn,
+        checkOutDate: checkOut,
+        nights: nights.length,
+        subtotal,
+        taxTotal,
+        totalAmount: total,
+        roomReallocated: datesChanged && !!rr.roomId,
+      };
+    });
   }
 
   /** Cancels a reservation. A reason is mandatory and always audited. */
-  async cancel(req: any, reservationId: string, reason: string) {
-    const property = await this.activeProperty(req);
+  async cancel(actor: ActorContext, reservationId: string, reason: string) {
+    const property = await this.activeProperty(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -490,11 +517,16 @@ export class ReservationsService {
     }
     if (!reason?.trim()) throw new BadRequestException('A cancellation reason is required');
 
-    return db.transaction(async (tx: any) => {
+    const result = await db.transaction(async (tx: any) => {
       const rrs = await tx.orm.public.ReservationRoom
         .where({ reservationId: brand(reservationId) })
         .all();
+      const freedNights: string[] = [];
       for (const rr of rrs) {
+        const nights = await tx.orm.public.RoomNightInventory
+          .where({ reservationRoomId: brand(rr.id) })
+          .all();
+        freedNights.push(...nights.map((n: any) => String(n.stayDate)));
         await tx.orm.public.RoomNightInventory
           .where({ reservationRoomId: brand(rr.id) })
           .deleteAll();
@@ -508,9 +540,9 @@ export class ReservationsService {
 
       await this.audit.record(
         {
-          organizationId: req.user.organizationId,
+          organizationId: actor.organizationId,
           propertyId: property.id,
-          actorUserId: req.user.id,
+          actorUserId: actor.id,
           action: 'reservation.cancel',
           resourceType: 'Reservation',
           resourceId: reservationId,
@@ -520,12 +552,16 @@ export class ReservationsService {
         tx,
       );
 
-      return { id: reservationId, status: 'CANCELLED', releasedRoomLines: rrs.length };
+      const roomId = (rrs[0]?.roomId as string | null) ?? null;
+      return { id: reservationId, status: 'CANCELLED', releasedRoomLines: rrs.length, roomId, freedNights };
     });
+
+    await this.holds.announceCancelled(actor, result.roomId, result.freedNights);
+    return { id: result.id, status: result.status, releasedRoomLines: result.releasedRoomLines };
   }
 
-  async detail(req: any, reservationId: string) {
-    const property = await this.activeProperty(req);
+  async detail(actor: ActorContext, reservationId: string) {
+    const property = await this.activeProperty(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -581,12 +617,12 @@ export class ReservationsService {
     };
   }
 
-  async list(req: any, opts: { status?: string; checkIn?: DateOnly; checkOut?: DateOnly; search?: string; page: number; pageSize: number }) {
-    const property = await this.activeProperty(req);
+  async list(actor: ActorContext, opts: ReservationListOptions) {
+    const property = await this.activeProperty(actor);
     const take = Math.min(Math.max(opts.pageSize, 1), 100);
     const skip = Math.max(opts.page, 1) - 1;
 
-    let rows = await db.orm.public.Reservation
+    const rows = await db.orm.public.Reservation
       .where({ propertyId: brand(property.id) })
       .orderBy((r) => r.createdAt.desc())
       .limit(take + 1)

@@ -23,7 +23,7 @@ import type {
 } from '@prisma/orm-postgres/contract/types';
 
 export type StorageHash =
-  StorageHashBase<'f062fa703dde8284abddd2faf2297c4526f3076b0292525272cf5bada03f8728'>;
+  StorageHashBase<'79388c46b023b73ce5279e12714a73f3df2806bf611ff77f96e10cd15372b2d1'>;
 export type ExecutionHash =
   ExecutionHashBase<'abb538ea2d325364bb7741633f32e543cda2b267ede336660885b857b0a44eba'>;
 export type ProfileHash =
@@ -523,6 +523,7 @@ export type FieldOutputTypes = {
       readonly createdById: CodecTypes['pg/uuid@1']['output'] | null;
       readonly currencyCode: Varchar<3>;
       readonly id: CodecTypes['pg/uuid@1']['output'];
+      readonly idempotencyKey: Varchar<120> | null;
       readonly primaryGuestId: CodecTypes['pg/uuid@1']['output'];
       readonly propertyId: CodecTypes['pg/uuid@1']['output'];
       readonly source: 'DIRECT' | 'WALK_IN' | 'PHONE' | 'EMAIL' | 'OTA' | 'CORPORATE' | 'OTHER';
@@ -584,8 +585,11 @@ export type FieldOutputTypes = {
     };
     readonly RoomNightInventory: {
       readonly createdAt: TimestampString<3>;
+      readonly holdExpiresAt: TimestampString<3> | null;
+      readonly holdToken: Varchar<120> | null;
+      readonly holdUserId: CodecTypes['pg/uuid@1']['output'] | null;
       readonly id: CodecTypes['pg/uuid@1']['output'];
-      readonly reservationRoomId: CodecTypes['pg/uuid@1']['output'];
+      readonly reservationRoomId: CodecTypes['pg/uuid@1']['output'] | null;
       readonly roomId: CodecTypes['pg/uuid@1']['output'];
       readonly stayDate: CodecTypes['pg/date-string@1']['output'];
     };
@@ -948,6 +952,7 @@ export type FieldInputTypes = {
       readonly createdById: CodecTypes['pg/uuid@1']['input'] | null;
       readonly currencyCode: CodecTypes['sql/varchar@1']['input'];
       readonly id: CodecTypes['pg/uuid@1']['input'];
+      readonly idempotencyKey: CodecTypes['sql/varchar@1']['input'] | null;
       readonly primaryGuestId: CodecTypes['pg/uuid@1']['input'];
       readonly propertyId: CodecTypes['pg/uuid@1']['input'];
       readonly source: 'DIRECT' | 'WALK_IN' | 'PHONE' | 'EMAIL' | 'OTA' | 'CORPORATE' | 'OTHER';
@@ -1009,8 +1014,11 @@ export type FieldInputTypes = {
     };
     readonly RoomNightInventory: {
       readonly createdAt: CodecTypes['pg/timestamp-string@1']['input'];
+      readonly holdExpiresAt: CodecTypes['pg/timestamp-string@1']['input'] | null;
+      readonly holdToken: CodecTypes['sql/varchar@1']['input'] | null;
+      readonly holdUserId: CodecTypes['pg/uuid@1']['input'] | null;
       readonly id: CodecTypes['pg/uuid@1']['input'];
-      readonly reservationRoomId: CodecTypes['pg/uuid@1']['input'];
+      readonly reservationRoomId: CodecTypes['pg/uuid@1']['input'] | null;
       readonly roomId: CodecTypes['pg/uuid@1']['input'];
       readonly stayDate: CodecTypes['pg/date-string@1']['input'];
     };
@@ -1373,6 +1381,7 @@ export type StorageColumnTypes = {
       readonly createdById: CodecTypes['pg/uuid@1']['output'] | null;
       readonly currencyCode: Varchar<3>;
       readonly id: CodecTypes['pg/uuid@1']['output'];
+      readonly idempotencyKey: Varchar<120> | null;
       readonly primaryGuestId: CodecTypes['pg/uuid@1']['output'];
       readonly propertyId: CodecTypes['pg/uuid@1']['output'];
       readonly source: 'DIRECT' | 'WALK_IN' | 'PHONE' | 'EMAIL' | 'OTA' | 'CORPORATE' | 'OTHER';
@@ -1434,8 +1443,11 @@ export type StorageColumnTypes = {
     };
     readonly RoomNightInventory: {
       readonly createdAt: TimestampString<3>;
+      readonly holdExpiresAt: TimestampString<3> | null;
+      readonly holdToken: Varchar<120> | null;
+      readonly holdUserId: CodecTypes['pg/uuid@1']['output'] | null;
       readonly id: CodecTypes['pg/uuid@1']['output'];
-      readonly reservationRoomId: CodecTypes['pg/uuid@1']['output'];
+      readonly reservationRoomId: CodecTypes['pg/uuid@1']['output'] | null;
       readonly roomId: CodecTypes['pg/uuid@1']['output'];
       readonly stayDate: CodecTypes['pg/date-string@1']['output'];
     };
@@ -1798,6 +1810,7 @@ export type StorageColumnInputTypes = {
       readonly createdById: CodecTypes['pg/uuid@1']['input'] | null;
       readonly currencyCode: CodecTypes['sql/varchar@1']['input'];
       readonly id: CodecTypes['pg/uuid@1']['input'];
+      readonly idempotencyKey: CodecTypes['sql/varchar@1']['input'] | null;
       readonly primaryGuestId: CodecTypes['pg/uuid@1']['input'];
       readonly propertyId: CodecTypes['pg/uuid@1']['input'];
       readonly source: 'DIRECT' | 'WALK_IN' | 'PHONE' | 'EMAIL' | 'OTA' | 'CORPORATE' | 'OTHER';
@@ -1859,8 +1872,11 @@ export type StorageColumnInputTypes = {
     };
     readonly RoomNightInventory: {
       readonly createdAt: CodecTypes['pg/timestamp-string@1']['input'];
+      readonly holdExpiresAt: CodecTypes['pg/timestamp-string@1']['input'] | null;
+      readonly holdToken: CodecTypes['sql/varchar@1']['input'] | null;
+      readonly holdUserId: CodecTypes['pg/uuid@1']['input'] | null;
       readonly id: CodecTypes['pg/uuid@1']['input'];
-      readonly reservationRoomId: CodecTypes['pg/uuid@1']['input'];
+      readonly reservationRoomId: CodecTypes['pg/uuid@1']['input'] | null;
       readonly roomId: CodecTypes['pg/uuid@1']['input'];
       readonly stayDate: CodecTypes['pg/date-string@1']['input'];
     };
@@ -2310,6 +2326,7 @@ export namespace Models {
     createdById: CodecTypes['pg/uuid@1']['output'] | null;
     currencyCode: Varchar<3>;
     id: CodecTypes['pg/uuid@1']['output'];
+    idempotencyKey: Varchar<120> | null;
     primaryGuestId: CodecTypes['pg/uuid@1']['output'];
     propertyId: CodecTypes['pg/uuid@1']['output'];
     source: 'DIRECT' | 'WALK_IN' | 'PHONE' | 'EMAIL' | 'OTA' | 'CORPORATE' | 'OTHER';
@@ -2402,11 +2419,14 @@ export namespace Models {
   };
   export type public_RoomNightInventory = {
     createdAt: TimestampString<3>;
+    holdExpiresAt: TimestampString<3> | null;
+    holdToken: Varchar<120> | null;
+    holdUserId: CodecTypes['pg/uuid@1']['output'] | null;
     id: CodecTypes['pg/uuid@1']['output'];
-    reservationRoomId: CodecTypes['pg/uuid@1']['output'];
+    reservationRoomId: CodecTypes['pg/uuid@1']['output'] | null;
     roomId: CodecTypes['pg/uuid@1']['output'];
     stayDate: CodecTypes['pg/date-string@1']['output'];
-    reservationRoom: public_ReservationRoom;
+    reservationRoom: public_ReservationRoom | null;
     room: public_Room;
     readonly [RelationKeys]?: 'reservationRoom' | 'room';
   };
@@ -4960,6 +4980,13 @@ type ContractBase = Omit<
                   readonly nullable: false;
                   readonly many: false;
                 };
+                readonly idempotencyKey: {
+                  readonly dataType: 'pg/varchar';
+                  readonly codecId: 'sql/varchar@1';
+                  readonly nullable: true;
+                  readonly typeParams: { readonly length: 120 };
+                  readonly many: false;
+                };
                 readonly primaryGuestId: {
                   readonly dataType: 'pg/uuid';
                   readonly codecId: 'pg/uuid@1';
@@ -5044,6 +5071,11 @@ type ContractBase = Omit<
               primaryKey: { readonly columns: readonly ['id'] };
               uniques: readonly [];
               indexes: readonly [
+                {
+                  readonly name: 'Reservation_idempotencyKey_key';
+                  readonly columns: readonly ['idempotencyKey'];
+                  readonly unique: true;
+                },
                 {
                   readonly name: 'Reservation_primaryGuestId_createdAt_idx';
                   readonly columns: readonly ['primaryGuestId', 'createdAt'];
@@ -5559,6 +5591,26 @@ type ContractBase = Omit<
                   readonly typeParams: { readonly precision: 3 };
                   readonly many: false;
                 };
+                readonly holdExpiresAt: {
+                  readonly dataType: 'pg/timestamp';
+                  readonly codecId: 'pg/timestamp-string@1';
+                  readonly nullable: true;
+                  readonly typeParams: { readonly precision: 3 };
+                  readonly many: false;
+                };
+                readonly holdToken: {
+                  readonly dataType: 'pg/varchar';
+                  readonly codecId: 'sql/varchar@1';
+                  readonly nullable: true;
+                  readonly typeParams: { readonly length: 120 };
+                  readonly many: false;
+                };
+                readonly holdUserId: {
+                  readonly dataType: 'pg/uuid';
+                  readonly codecId: 'pg/uuid@1';
+                  readonly nullable: true;
+                  readonly many: false;
+                };
                 readonly id: {
                   readonly dataType: 'pg/uuid';
                   readonly codecId: 'pg/uuid@1';
@@ -5568,7 +5620,7 @@ type ContractBase = Omit<
                 readonly reservationRoomId: {
                   readonly dataType: 'pg/uuid';
                   readonly codecId: 'pg/uuid@1';
-                  readonly nullable: false;
+                  readonly nullable: true;
                   readonly many: false;
                 };
                 readonly roomId: {
@@ -5587,6 +5639,11 @@ type ContractBase = Omit<
               primaryKey: { readonly columns: readonly ['id'] };
               uniques: readonly [];
               indexes: readonly [
+                {
+                  readonly name: 'RoomNightInventory_holdExpiresAt_idx';
+                  readonly columns: readonly ['holdExpiresAt'];
+                  readonly unique: false;
+                },
                 {
                   readonly name: 'RoomNightInventory_reservationRoomId_stayDate_key';
                   readonly columns: readonly ['reservationRoomId', 'stayDate'];
@@ -8889,6 +8946,14 @@ type ContractBase = Omit<
                 readonly nullable: false;
                 readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/uuid@1' };
               };
+              readonly idempotencyKey: {
+                readonly nullable: true;
+                readonly type: {
+                  readonly kind: 'scalar';
+                  readonly codecId: 'sql/varchar@1';
+                  readonly typeParams: { readonly length: 120 };
+                };
+              };
               readonly primaryGuestId: {
                 readonly nullable: false;
                 readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/uuid@1' };
@@ -9024,6 +9089,7 @@ type ContractBase = Omit<
                 readonly createdById: { readonly column: 'createdById' };
                 readonly currencyCode: { readonly column: 'currencyCode' };
                 readonly id: { readonly column: 'id' };
+                readonly idempotencyKey: { readonly column: 'idempotencyKey' };
                 readonly primaryGuestId: { readonly column: 'primaryGuestId' };
                 readonly propertyId: { readonly column: 'propertyId' };
                 readonly source: { readonly column: 'source' };
@@ -9507,12 +9573,32 @@ type ContractBase = Omit<
                   readonly typeParams: { readonly precision: 3 };
                 };
               };
+              readonly holdExpiresAt: {
+                readonly nullable: true;
+                readonly type: {
+                  readonly kind: 'scalar';
+                  readonly codecId: 'pg/timestamp-string@1';
+                  readonly typeParams: { readonly precision: 3 };
+                };
+              };
+              readonly holdToken: {
+                readonly nullable: true;
+                readonly type: {
+                  readonly kind: 'scalar';
+                  readonly codecId: 'sql/varchar@1';
+                  readonly typeParams: { readonly length: 120 };
+                };
+              };
+              readonly holdUserId: {
+                readonly nullable: true;
+                readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/uuid@1' };
+              };
               readonly id: {
                 readonly nullable: false;
                 readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/uuid@1' };
               };
               readonly reservationRoomId: {
-                readonly nullable: false;
+                readonly nullable: true;
                 readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/uuid@1' };
               };
               readonly roomId: {
@@ -9531,7 +9617,7 @@ type ContractBase = Omit<
                   readonly model: 'ReservationRoom';
                 };
                 readonly cardinality: 'N:1';
-                readonly nullable: false;
+                readonly nullable: true;
                 readonly on: {
                   readonly localFields: readonly ['reservationRoomId'];
                   readonly targetFields: readonly ['id'];
@@ -9552,6 +9638,9 @@ type ContractBase = Omit<
               readonly namespaceId: 'public';
               readonly fields: {
                 readonly createdAt: { readonly column: 'createdAt' };
+                readonly holdExpiresAt: { readonly column: 'holdExpiresAt' };
+                readonly holdToken: { readonly column: 'holdToken' };
+                readonly holdUserId: { readonly column: 'holdUserId' };
                 readonly id: { readonly column: 'id' };
                 readonly reservationRoomId: { readonly column: 'reservationRoomId' };
                 readonly roomId: { readonly column: 'roomId' };

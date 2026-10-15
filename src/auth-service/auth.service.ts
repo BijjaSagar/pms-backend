@@ -10,8 +10,7 @@ import { db } from '../prisma/db.js';
 import { brand, now, ts } from '../prisma/compat.js';
 import { AuditService } from '../audit/audit.service.js';
 import { TokenService } from './token.service.js';
-
-export const SESSION_COOKIE = 'hotel_pms_session';
+import type { RequestMeta } from '../contracts/auth.messages.js';
 
 /**
  * Argon2id parameters. Tuned for interactive logins on modest hardware.
@@ -26,12 +25,6 @@ export const ARGON2_OPTS = {
   timeCost: 2,
   parallelism: 1,
 } as const;
-
-export interface RequestMeta {
-  ip?: string | null;
-  userAgent?: string | null;
-  requestId?: string | null;
-}
 
 export interface MembershipView {
   id: string;
@@ -72,10 +65,6 @@ export class AuthService {
   private get sessionTtlMs(): number {
     const hours = Number(this.config.get<number>('session.ttlHours') ?? 12);
     return hours * 60 * 60 * 1000;
-  }
-
-  async hashPassword(plain: string): Promise<string> {
-    return argon2.hash(plain, ARGON2_OPTS);
   }
 
   /**

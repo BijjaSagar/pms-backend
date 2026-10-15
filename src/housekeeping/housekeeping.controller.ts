@@ -146,6 +146,13 @@ export class HousekeepingController {
     return this.hk.block(req, id, dto.reason);
   }
 
+  /** Releases a blocked task back to the floor without cancelling it. */
+  @RequirePermissions('housekeeping.complete')
+  @Post('housekeeping/tasks/:id/unblock')
+  unblockTask(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    return this.hk.unblock(req, id);
+  }
+
   @RequirePermissions('housekeeping.assign')
   @Post('housekeeping/tasks/:id/cancel')
   cancelTask(@Param('id') id: string, @Body() dto: ReasonDto, @Req() req: AuthenticatedRequest) {

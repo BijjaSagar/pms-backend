@@ -1,0 +1,291 @@
+[
+  {
+    "id": "column.public.Reservation.idempotencyKey",
+    "label": "Add column \"idempotencyKey\" to \"Reservation\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "idempotencyKey",
+        "table": "Reservation"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"idempotencyKey\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "Reservation",
+          "idempotencyKey"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"idempotencyKey\"",
+        "sql": "ALTER TABLE \"public\".\"Reservation\" ADD COLUMN \"idempotencyKey\" character varying(120)"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"idempotencyKey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "Reservation",
+          "idempotencyKey"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "column.public.RoomNightInventory.holdExpiresAt",
+    "label": "Add column \"holdExpiresAt\" to \"RoomNightInventory\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "holdExpiresAt",
+        "table": "RoomNightInventory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"holdExpiresAt\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "holdExpiresAt"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"holdExpiresAt\"",
+        "sql": "ALTER TABLE \"public\".\"RoomNightInventory\" ADD COLUMN \"holdExpiresAt\" timestamp(3)"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"holdExpiresAt\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "holdExpiresAt"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "column.public.RoomNightInventory.holdToken",
+    "label": "Add column \"holdToken\" to \"RoomNightInventory\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "holdToken",
+        "table": "RoomNightInventory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"holdToken\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "holdToken"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"holdToken\"",
+        "sql": "ALTER TABLE \"public\".\"RoomNightInventory\" ADD COLUMN \"holdToken\" character varying(120)"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"holdToken\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "holdToken"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "column.public.RoomNightInventory.holdUserId",
+    "label": "Add column \"holdUserId\" to \"RoomNightInventory\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "holdUserId",
+        "table": "RoomNightInventory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"holdUserId\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "holdUserId"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"holdUserId\"",
+        "sql": "ALTER TABLE \"public\".\"RoomNightInventory\" ADD COLUMN \"holdUserId\" uuid"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"holdUserId\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "holdUserId"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "alterNullability.dropNotNull.RoomNightInventory.reservationRoomId",
+    "label": "Drop NOT NULL on \"RoomNightInventory\".\"reservationRoomId\"",
+    "operationClass": "widening",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "reservationRoomId",
+        "table": "RoomNightInventory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"reservationRoomId\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "reservationRoomId"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "drop NOT NULL on \"reservationRoomId\"",
+        "sql": "ALTER TABLE \"public\".\"RoomNightInventory\" ALTER COLUMN \"reservationRoomId\" DROP NOT NULL"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"reservationRoomId\" is nullable",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3 AND \"is_nullable\" = $4)) AS \"result\"",
+        "params": [
+          "public",
+          "RoomNightInventory",
+          "reservationRoomId",
+          "YES"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.Reservation.Reservation_idempotencyKey_key",
+    "label": "Create index \"Reservation_idempotencyKey_key\" on \"Reservation\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "Reservation_idempotencyKey_key",
+        "table": "Reservation"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"Reservation_idempotencyKey_key\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"Reservation_idempotencyKey_key\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"Reservation_idempotencyKey_key\"",
+        "sql": "CREATE UNIQUE INDEX \"Reservation_idempotencyKey_key\" ON \"public\".\"Reservation\" (\"idempotencyKey\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"Reservation_idempotencyKey_key\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"Reservation_idempotencyKey_key\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.RoomNightInventory.RoomNightInventory_holdExpiresAt_idx",
+    "label": "Create index \"RoomNightInventory_holdExpiresAt_idx\" on \"RoomNightInventory\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "RoomNightInventory_holdExpiresAt_idx",
+        "table": "RoomNightInventory"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"RoomNightInventory_holdExpiresAt_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"RoomNightInventory_holdExpiresAt_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"RoomNightInventory_holdExpiresAt_idx\"",
+        "sql": "CREATE INDEX \"RoomNightInventory_holdExpiresAt_idx\" ON \"public\".\"RoomNightInventory\" (\"holdExpiresAt\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"RoomNightInventory_holdExpiresAt_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"RoomNightInventory_holdExpiresAt_idx\""
+        ]
+      }
+    ]
+  }
+]

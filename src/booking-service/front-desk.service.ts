@@ -8,7 +8,7 @@ import {
 import { db } from '../prisma/db.js';
 import { brand, now, ts } from '../prisma/compat.js';
 import { AuditService } from '../audit/audit.service.js';
-import { FolioService } from '../folios/folio.service.js';
+import { FolioService } from './folio.service.js';
 import { fromDecimal, toDecimal } from '../common/money.js';
 import { activeTaxRules, estimateStay } from '../common/tax-rules.js';
 import {
@@ -18,13 +18,14 @@ import {
   enumerateNights,
   type DateOnly,
 } from '../common/dates.js';
+import type { ActorContext } from '../contracts/shared.js';
 
 const ROOM_NIGHT_UNIQUE = 'RoomNightInventory_roomId_stayDate_key';
 
 /** Room states a guest may legitimately be admitted to. */
 const CHECKIN_READY = new Set(['VACANT_CLEAN', 'INSPECTED', 'OCCUPIED_CLEAN']);
 
-  @Injectable()
+@Injectable()
 export class FrontDeskService {
   constructor(
     private readonly folios: FolioService,
@@ -61,8 +62,8 @@ export class FrontDeskService {
     }
   }
 
-  private async property(req: any) {
-    const id = req.user?.activePropertyId;
+  private async property(actor: ActorContext) {
+    const id = actor.activePropertyId;
     if (!id) throw new BadRequestException('Select an active property first');
     const p = await db.orm.public.Property.where({ id: brand(id) }).first();
     if (!p) throw new BadRequestException('Active property not found');
@@ -78,8 +79,8 @@ export class FrontDeskService {
    * state is returned unchanged rather than opening a second folio. Callers can
    * therefore retry safely after a dropped connection.
    */
-  async checkIn(req: any, reservationId: string, opts: { overrideReason?: string }) {
-    const property = await this.property(req);
+  async checkIn(actor: ActorContext, reservationId: string, opts: { overrideReason?: string }) {
+    const property = await this.property(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -135,7 +136,7 @@ export class FrontDeskService {
 
     // The first night is charged on arrival so the folio shows a real balance
     // while the guest is in house, rather than appearing free until departure.
-    await this.postRoomNights(folio.id, reservation.id, String(line.nightlyRate), 1, req.user.id);
+    await this.postRoomNights(folio.id, reservation.id, String(line.nightlyRate), 1, actor.id);
 
     return db.transaction(async (tx: any) => {
       await tx.orm.public.Reservation.where({ id: brand(reservation.id) }).update({
@@ -146,9 +147,9 @@ export class FrontDeskService {
 
       await this.audit.record(
         {
-          organizationId: req.user.organizationId,
+          organizationId: actor.organizationId,
           propertyId: property.id,
-          actorUserId: req.user.id,
+          actorUserId: actor.id,
           action: 'stay.check_in',
           resourceType: 'Reservation',
           resourceId: reservation.id,
@@ -179,8 +180,8 @@ export class FrontDeskService {
    * guest who departs early is not billed for nights they did not use. Posting
    * is idempotency-keyed, so a retried checkout cannot double-charge.
    */
-  async checkOut(req: any, reservationId: string, opts: { overrideReason?: string }) {
-    const property = await this.property(req);
+  async checkOut(actor: ActorContext, reservationId: string, opts: { overrideReason?: string }) {
+    const property = await this.property(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -234,7 +235,7 @@ export class FrontDeskService {
         reservation.id,
         String(line.nightlyRate),
         stayedNights,
-        req.user.id,
+        actor.id,
       );
     }
 
@@ -251,7 +252,7 @@ export class FrontDeskService {
       // Waiving money is an override, so it needs its own permission on top of
       // `stay.check-out`. Front Desk holds the latter but not this one, which is
       // what keeps the escape hatch with Manager and Admin.
-      if (!(req.user?.permissions ?? []).includes('folio.item.adjust')) {
+      if (!(actor.permissions ?? []).includes('folio.item.adjust')) {
         throw new ForbiddenException(
           'You do not have permission to waive an outstanding balance.',
         );
@@ -265,7 +266,7 @@ export class FrontDeskService {
         quantity: 1,
         unitAmount: `-${balance.balance}`,
         taxable: false,
-        postedById: req.user?.id ?? null,
+        postedById: actor.id ?? null,
         idempotencyKey: `checkout-waiver:${reservation.id}`,
       });
       balance = await this.folios.balance(folio.id);
@@ -306,9 +307,9 @@ export class FrontDeskService {
 
       await this.audit.record(
         {
-          organizationId: req.user.organizationId,
+          organizationId: actor.organizationId,
           propertyId: property.id,
-          actorUserId: req.user.id,
+          actorUserId: actor.id,
           action: 'stay.check_out',
           resourceType: 'Reservation',
           resourceId: reservation.id,
@@ -345,8 +346,8 @@ export class FrontDeskService {
    * Extends a stay, claiming the extra nights through the same allocation path
    * as booking so a clash returns 409 rather than silently overwriting.
    */
-  async extend(req: any, reservationId: string, newCheckOutDate: DateOnly) {
-    const property = await this.property(req);
+  async extend(actor: ActorContext, reservationId: string, newCheckOutDate: DateOnly) {
+    const property = await this.property(actor);
     const reservation = await db.orm.public.Reservation
       .where({ id: brand(reservationId), propertyId: brand(property.id) })
       .first();
@@ -383,61 +384,56 @@ export class FrontDeskService {
     const extendedTaxTotal = toDecimal(extended.taxTotal);
     const extendedTotal = toDecimal(extended.grandTotal);
 
-    try {
-      return await db.transaction(async (tx: any) => {
-        for (const night of addedNights) {
-          try {
-            await tx.orm.public.RoomNightInventory.create({
-              roomId: brand(line.roomId!),
-              reservationRoomId: brand(line.id),
-              stayDate: brand(night),
-              createdAt: ts(new Date()),
-            });
-          } catch (e) {
-            const msg = String((e as { message?: string })?.message ?? '');
-            if (msg.includes(ROOM_NIGHT_UNIQUE) || /duplicate key/i.test(msg)) {
-              throw new ConflictException(
-                'The room is not available for the extra nights; choose another room or shorten the stay.',
-              );
-            }
-            throw e;
+    return db.transaction(async (tx: any) => {
+      for (const night of addedNights) {
+        try {
+          await tx.orm.public.RoomNightInventory.create({
+            roomId: brand(line.roomId!),
+            reservationRoomId: brand(line.id),
+            stayDate: brand(night),
+            createdAt: ts(new Date()),
+          });
+        } catch (e) {
+          const msg = String((e as { message?: string })?.message ?? '');
+          if (msg.includes(ROOM_NIGHT_UNIQUE) || /duplicate key/i.test(msg)) {
+            throw new ConflictException(
+              'The room is not available for the extra nights; choose another room or shorten the stay.',
+            );
           }
+          throw e;
         }
-        await tx.orm.public.Reservation.where({ id: brand(reservation.id) }).update({
-          checkOutDate: brand(newCheckOutDate),
-          subtotal: brand(extendedSubtotal),
-          taxTotal: brand(extendedTaxTotal),
-          totalAmount: brand(extendedTotal),
-        });
-        await this.audit.record(
-          {
-            organizationId: req.user.organizationId,
-            propertyId: property.id,
-            actorUserId: req.user.id,
-            action: 'stay.extend',
-            resourceType: 'Reservation',
-            resourceId: reservation.id,
-            outcome: 'SUCCESS',
-            metadata: { previousCheckOut: currentOut, newCheckOut: newCheckOutDate, addedNights: addedNights.length },
-          },
-          tx,
-        );
-        return {
-          id: reservation.id,
-          previousCheckOut: currentOut,
-          checkOutDate: newCheckOutDate,
-          addedNights: addedNights.length,
-          nights: fullNights.length,
-          subtotal: extendedSubtotal,
-          taxTotal: extendedTaxTotal,
-          totalAmount: extendedTotal,
-          roomNumber: room?.roomNumber ?? null,
-        };
+      }
+      await tx.orm.public.Reservation.where({ id: brand(reservation.id) }).update({
+        checkOutDate: brand(newCheckOutDate),
+        subtotal: brand(extendedSubtotal),
+        taxTotal: brand(extendedTaxTotal),
+        totalAmount: brand(extendedTotal),
       });
-    } catch (e) {
-      if (e instanceof ConflictException) throw e;
-      throw e;
-    }
+      await this.audit.record(
+        {
+          organizationId: actor.organizationId,
+          propertyId: property.id,
+          actorUserId: actor.id,
+          action: 'stay.extend',
+          resourceType: 'Reservation',
+          resourceId: reservation.id,
+          outcome: 'SUCCESS',
+          metadata: { previousCheckOut: currentOut, newCheckOut: newCheckOutDate, addedNights: addedNights.length },
+        },
+        tx,
+      );
+      return {
+        id: reservation.id,
+        previousCheckOut: currentOut,
+        checkOutDate: newCheckOutDate,
+        addedNights: addedNights.length,
+        nights: fullNights.length,
+        subtotal: extendedSubtotal,
+        taxTotal: extendedTaxTotal,
+        totalAmount: extendedTotal,
+        roomNumber: room?.roomNumber ?? null,
+      };
+    });
   }
 
   // ------------------------------------------------------------------- reads
@@ -498,8 +494,8 @@ export class FrontDeskService {
   }
 
   /** Guests expected to arrive, keyed on the property's business date. */
-  async arrivals(req: any) {
-    const property = await this.property(req);
+  async arrivals(actor: ActorContext) {
+    const property = await this.property(actor);
     const today = businessDateFor(property.timezone);
     const rows = await db.orm.public.Reservation
       .where({ propertyId: brand(property.id), status: brand('CONFIRMED') })
@@ -511,8 +507,8 @@ export class FrontDeskService {
   }
 
   /** Guests due to depart today. */
-  async departures(req: any) {
-    const property = await this.property(req);
+  async departures(actor: ActorContext) {
+    const property = await this.property(actor);
     const today = businessDateFor(property.timezone);
     const rows = await db.orm.public.Reservation
       .where({ propertyId: brand(property.id), status: brand('CHECKED_IN') })
@@ -531,8 +527,8 @@ export class FrontDeskService {
   }
 
   /** Guests currently in house. */
-  async inHouse(req: any) {
-    const property = await this.property(req);
+  async inHouse(actor: ActorContext) {
+    const property = await this.property(actor);
     const rows = await db.orm.public.Reservation
       .where({ propertyId: brand(property.id), status: brand('CHECKED_IN') })
       .all();

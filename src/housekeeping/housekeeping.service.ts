@@ -32,6 +32,8 @@ const ALLOWED: Record<string, string[]> = {
   inspect: ['INSPECTION_REQUIRED'],
   block: ['TODO', 'IN_PROGRESS', 'CLEANED', 'INSPECTION_REQUIRED'],
   cancel: ['TODO', 'IN_PROGRESS', 'CLEANED', 'INSPECTION_REQUIRED'],
+  // A blocked task can be released back to the floor without cancelling it.
+  unblock: ['BLOCKED'],
 };
 
 @Injectable()
@@ -68,6 +70,12 @@ export class HousekeepingService {
       : [];
     const roomById = new Map(rooms.map((r) => [r.id, r]));
 
+    const roomTypeIds = [...new Set(rooms.map((r) => r.roomTypeId))];
+    const roomTypes = roomTypeIds.length
+      ? await db.orm.public.RoomType.where((m) => m.id.in(roomTypeIds)).all()
+      : [];
+    const roomTypeById = new Map(roomTypes.map((t) => [t.id, t]));
+
     const userIds = [...new Set(visible.map((t) => t.assignedToId).filter(Boolean))] as string[];
     const users = userIds.length
       ? await db.orm.public.User.where((m) => m.id.in(userIds)).all()
@@ -84,6 +92,7 @@ export class HousekeepingService {
           priority: t.priority,
           roomId: t.roomId,
           roomNumber: room?.roomNumber ?? null,
+          roomTypeName: room ? roomTypeById.get(room.roomTypeId)?.name ?? null : null,
           floor: room?.floor ?? null,
           wing: room?.wing ?? null,
           roomStatus: room?.status ?? null,
@@ -160,7 +169,8 @@ export class HousekeepingService {
 
   /** Reassigns a task. Held by `housekeeping.assign`. */
   async assign(req: any, taskId: string, assignedToId: string | null) {
-    const task = await this.load(taskId);
+    const property = await this.property(req);
+    const task = await this.load(taskId, property.id);
     if (task.status === 'READY' || task.status === 'CANCELLED') {
       throw new ConflictException(`A ${task.status} task cannot be reassigned`);
     }
@@ -204,7 +214,8 @@ export class HousekeepingService {
       roomStatus?: (current: string, occupied: boolean) => string;
     } = {},
   ) {
-    const task = await this.load(taskId);
+    const property = await this.property(req);
+    const task = await this.load(taskId, property.id);
     const room = await db.orm.public.Room.where({ id: brand(task.roomId) }).first();
     if (!room) throw new NotFoundException('Room not found');
 
@@ -260,6 +271,11 @@ export class HousekeepingService {
 
       case 'cancel':
         patch.status = brand('CANCELLED');
+        break;
+
+      case 'unblock':
+        patch.status = brand('TODO');
+        patch.blockedReason = brand(null);
         break;
     }
 
@@ -325,6 +341,10 @@ export class HousekeepingService {
     return this.transition(req, taskId, 'block', { reason });
   }
 
+  unblock(req: any, taskId: string) {
+    return this.transition(req, taskId, 'unblock');
+  }
+
   cancel(req: any, taskId: string, reason: string) {
     return this.transition(req, taskId, 'cancel', { reason });
   }
@@ -353,8 +373,10 @@ export class HousekeepingService {
     };
   }
 
-  private async load(taskId: string) {
-    const task = await db.orm.public.HousekeepingTask.where({ id: brand(taskId) }).first();
+  private async load(taskId: string, propertyId: string) {
+    const task = await db.orm.public.HousekeepingTask
+      .where({ id: brand(taskId), propertyId: brand(propertyId) })
+      .first();
     if (!task) throw new NotFoundException('Task not found');
     return task;
   }

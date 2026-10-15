@@ -10,6 +10,7 @@ import { brand, now } from '../prisma/compat.js';
 import { fromDecimal } from '../common/money.js';
 import { AuditService } from '../audit/audit.service.js';
 import { FolioService } from './folio.service.js';
+import type { ActorContext } from '../contracts/shared.js';
 
 /**
  * Invoices are a presentation of a settled folio, not a parallel set of books.
@@ -88,7 +89,7 @@ export class InvoiceService {
    * The totals are taken from the folio balance rather than recomputed, so the
    * document states the same figures the guest settled.
    */
-  async issue(req: any, folioId: string) {
+  async issue(actor: ActorContext, folioId: string) {
     const folio = await db.orm.public.Folio.where({ id: brand(folioId) }).first();
     if (!folio) throw new NotFoundException('Folio not found');
 
@@ -141,9 +142,9 @@ export class InvoiceService {
     }
 
     await this.audit.record({
-      organizationId: req.user?.organizationId,
+      organizationId: actor.organizationId,
       propertyId,
-      actorUserId: req.user?.id,
+      actorUserId: actor.id,
       action: 'invoice.issue',
       resourceType: 'Invoice',
       resourceId: invoice.id,
@@ -230,7 +231,7 @@ export class InvoiceService {
   }
 
   /** Withdraws an issued invoice. Reason is mandatory. */
-  async voidInvoice(req: any, invoiceId: string, reason: string) {
+  async voidInvoice(actor: ActorContext, invoiceId: string, reason: string) {
     const trimmed = reason?.trim();
     if (!trimmed) throw new BadRequestException('Voiding an invoice requires a reason');
 
@@ -251,9 +252,9 @@ export class InvoiceService {
       });
       await this.audit.record(
         {
-          organizationId: req.user?.organizationId,
+          organizationId: actor.organizationId,
           propertyId: invoice.propertyId,
-          actorUserId: req.user?.id,
+          actorUserId: actor.id,
           action: 'invoice.void',
           resourceType: 'Invoice',
           resourceId: invoice.id,

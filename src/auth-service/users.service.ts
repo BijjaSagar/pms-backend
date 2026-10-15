@@ -10,9 +10,10 @@ import * as argon2 from 'argon2';
 import { db } from '../prisma/db.js';
 import { brand, now, ts } from '../prisma/compat.js';
 import { parseTimestamp } from '../common/dates.js';
-import { ARGON2_OPTS } from '../auth/auth.service.js';
+import { ARGON2_OPTS } from './auth.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { decideAccountChange, decideRoleGrant } from './escalation.policy.js';
+import type { ActorContext } from '../contracts/auth.messages.js';
 
 /**
  * Staff administration.
@@ -22,21 +23,25 @@ import { decideAccountChange, decideRoleGrant } from './escalation.policy.js';
  * disable or re-role anyone. Every mutation here writes an audit row, because
  * "who gave whom which role" is the question an administrator is asked months
  * later and there is no other record of it.
+ *
+ * The actor arrives as an `ActorContext` rather than an Express request: this
+ * code now runs in the auth microservice, where the gateway sends the already
+ * authenticated principal across the transport.
  */
 @Injectable()
 export class UsersService {
   constructor(private readonly audit: AuditService) {}
 
-  private async context(req: any) {
-    const propertyId = req.user?.activePropertyId;
+  private async context(actor: ActorContext) {
+    const propertyId = actor.activePropertyId;
     if (!propertyId) throw new BadRequestException('Select an active property first');
     const property = await db.orm.public.Property.where({ id: brand(propertyId) }).first();
     if (!property) throw new BadRequestException('Active property not found');
     return { property, organizationId: property.organizationId };
   }
 
-  private permissionsOf(req: any): string[] {
-    return (req.user?.permissions ?? []) as string[];
+  private permissionsOf(actor: ActorContext): string[] {
+    return actor.permissions ?? [];
   }
 
   private async roleByKey(organizationId: string, key: string) {
@@ -62,8 +67,8 @@ export class UsersService {
    * administrator of one property has no business enumerating another
    * property's team.
    */
-  async list(req: any) {
-    const { property } = await this.context(req);
+  async list(actor: ActorContext) {
+    const { property } = await this.context(actor);
 
     const memberships = await db.orm.public.PropertyMembership
       .where({ propertyId: brand(property.id), isActive: brand(true) })
@@ -120,8 +125,8 @@ export class UsersService {
       .sort((a: any, b: any) => a.fullName.localeCompare(b.fullName));
   }
 
-  async get(req: any, userId: string) {
-    const rows = await this.list(req);
+  async get(actor: ActorContext, userId: string) {
+    const rows = await this.list(actor);
     const found = rows.find((r: any) => r.userId === userId);
     if (!found) throw new NotFoundException('No such staff member at this property');
     return found;
@@ -136,14 +141,14 @@ export class UsersService {
    * administrator to pass on. Claiming an email was sent would be worse than
    * being explicit that it was not.
    */
-  async invite(req: any, input: {
+  async invite(actor: ActorContext, input: {
     email: string;
     fullName: string;
     propertyId?: string;
     roleKey: string;
     expiresAt?: string | null;
   }) {
-    const { property, organizationId } = await this.context(req);
+    const { property, organizationId } = await this.context(actor);
 
     const email = input.email?.trim().toLowerCase();
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
@@ -163,7 +168,7 @@ export class UsersService {
     // The grant check runs before anything is written.
     const targetPermissions = await this.permissionsOfRole(role.id);
     const decision = decideRoleGrant({
-      grantorPermissions: this.permissionsOf(req),
+      grantorPermissions: this.permissionsOf(actor),
       targetPermissions,
       targetIsSystemRole: role.isSystem,
       grantingSelf: false,
@@ -217,9 +222,9 @@ export class UsersService {
     });
 
     await this.audit.record({
-      organizationId: req.user?.organizationId,
+      organizationId: actor.organizationId,
       propertyId: targetProperty,
-      actorUserId: req.user?.id,
+      actorUserId: actor.id,
       action: 'user.invite',
       resourceType: 'User',
       resourceId: user.id,
@@ -249,8 +254,8 @@ export class UsersService {
   }
 
   /** Issues a fresh token, invalidating the previous one. */
-  async reissueInvite(req: any, userId: string, expiresAt?: string | null) {
-    const { property } = await this.context(req);
+  async reissueInvite(actor: ActorContext, userId: string, expiresAt?: string | null) {
+    const { property } = await this.context(actor);
     const user = await db.orm.public.User.where({ id: brand(userId) }).first();
     if (!user) throw new NotFoundException('User not found');
     if (user.status === 'ACTIVE') {
@@ -265,9 +270,9 @@ export class UsersService {
     });
 
     await this.audit.record({
-      organizationId: req.user?.organizationId,
+      organizationId: actor.organizationId,
       propertyId: property.id,
-      actorUserId: req.user?.id,
+      actorUserId: actor.id,
       action: 'user.invite.reissue',
       resourceType: 'User',
       resourceId: user.id,
@@ -348,8 +353,8 @@ export class UsersService {
   // ------------------------------------------------------------------ updates
 
   /** Changes the role held at a property. Audited, and escalation-checked. */
-  async setRole(req: any, userId: string, propertyId: string, roleKey: string) {
-    const { organizationId } = await this.context(req);
+  async setRole(actor: ActorContext, userId: string, propertyId: string, roleKey: string) {
+    const { organizationId } = await this.context(actor);
 
     const user = await db.orm.public.User.where({ id: brand(userId) }).first();
     if (!user) throw new NotFoundException('User not found');
@@ -367,7 +372,7 @@ export class UsersService {
       return { idempotent: true, userId, roleKey };
     }
 
-    const isSelf = req.user?.id === userId;
+    const isSelf = actor.id === userId;
     const currentIsAdmin = currentRole?.key === 'ADMIN';
 
     // Removing the last admin is refused before the permission check so the
@@ -384,7 +389,7 @@ export class UsersService {
 
     const targetPermissions = await this.permissionsOfRole(role.id);
     const decision = decideRoleGrant({
-      grantorPermissions: this.permissionsOf(req),
+      grantorPermissions: this.permissionsOf(actor),
       targetPermissions,
       targetIsSystemRole: role.isSystem,
       grantingSelf: isSelf,
@@ -396,9 +401,9 @@ export class UsersService {
     });
 
     await this.audit.record({
-      organizationId: req.user?.organizationId,
+      organizationId: actor.organizationId,
       propertyId: propertyId,
-      actorUserId: req.user?.id,
+      actorUserId: actor.id,
       action: 'role.assign',
       resourceType: 'User',
       resourceId: userId,
@@ -410,13 +415,13 @@ export class UsersService {
   }
 
   /** Enables or disables an account, revoking its sessions when disabled. */
-  async setStatus(req: any, userId: string, status: 'ACTIVE' | 'DISABLED') {
-    const { property, organizationId } = await this.context(req);
+  async setStatus(actor: ActorContext, userId: string, status: 'ACTIVE' | 'DISABLED') {
+    const { property, organizationId } = await this.context(actor);
     const user = await db.orm.public.User.where({ id: brand(userId) }).first();
     if (!user) throw new NotFoundException('User not found');
     if (user.status === status) return { idempotent: true, userId, status };
 
-    const isSelf = req.user?.id === userId;
+    const isSelf = actor.id === userId;
     if (status === 'DISABLED') {
       const memberships = await db.orm.public.PropertyMembership
         .where({ userId: brand(userId), isActive: brand(true) })
@@ -451,9 +456,9 @@ export class UsersService {
     });
 
     await this.audit.record({
-      organizationId: req.user?.organizationId,
+      organizationId: actor.organizationId,
       propertyId: property.id,
-      actorUserId: req.user?.id,
+      actorUserId: actor.id,
       action: status === 'DISABLED' ? 'user.deactivate' : 'user.activate',
       resourceType: 'User',
       resourceId: userId,
@@ -464,8 +469,8 @@ export class UsersService {
     return { idempotent: false, userId, status };
   }
 
-  async updateProfile(req: any, userId: string, patch: { fullName?: string }) {
-    const { property } = await this.context(req);
+  async updateProfile(actor: ActorContext, userId: string, patch: { fullName?: string }) {
+    const { property } = await this.context(actor);
     const user = await db.orm.public.User.where({ id: brand(userId) }).first();
     if (!user) throw new NotFoundException('User not found');
 
@@ -475,9 +480,9 @@ export class UsersService {
     if (Object.keys(updates).length > 0) {
       await db.orm.public.User.where({ id: brand(userId) }).update(updates);
       await this.audit.record({
-        organizationId: req.user?.organizationId,
+        organizationId: actor.organizationId,
         propertyId: property.id,
-        actorUserId: req.user?.id,
+        actorUserId: actor.id,
         action: 'user.update',
         resourceType: 'User',
         resourceId: userId,
@@ -486,12 +491,12 @@ export class UsersService {
       });
     }
 
-    return this.get(req, userId);
+    return this.get(actor, userId);
   }
 
   /** Cancels a pending invitation without touching the account itself. */
-  async cancelInvite(req: any, userId: string) {
-    const { property } = await this.context(req);
+  async cancelInvite(actor: ActorContext, userId: string) {
+    const { property } = await this.context(actor);
     const user = await db.orm.public.User.where({ id: brand(userId) }).first();
     if (!user) throw new NotFoundException('User not found');
 
@@ -506,9 +511,9 @@ export class UsersService {
     }
 
     await this.audit.record({
-      organizationId: req.user?.organizationId,
+      organizationId: actor.organizationId,
       propertyId: property.id,
-      actorUserId: req.user?.id,
+      actorUserId: actor.id,
       action: 'user.invite.cancel',
       resourceType: 'User',
       resourceId: userId,

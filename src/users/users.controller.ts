@@ -20,8 +20,9 @@ import {
 } from 'class-validator';
 import { Public, RequirePermissions } from '../common/decorators/access.decorator.js';
 import type { AuthenticatedRequest } from '../common/guards/auth.guard.js';
-import { UsersService } from './users.service.js';
-import { RolesService, TaxRulesService } from './roles.service.js';
+import { AuthClientService } from '../auth-client/auth-client.service.js';
+import { USER_MESSAGES, type ActorContext } from '../contracts/auth.messages.js';
+import { TaxRulesService } from './tax-rules.service.js';
 
 class InviteDto {
   @IsString() @MaxLength(320) email: string;
@@ -72,13 +73,30 @@ class TaxRulePatchDto {
   @IsOptional() @IsString() @MaxLength(120) name?: string;
 }
 
+/**
+ * Staff, roles and tax rules.
+ *
+ * The staff and role handlers are thin: they validate the HTTP body, package the
+ * authenticated actor, and forward to the auth microservice. Tax rules are not
+ * authorization state and stay local.
+ */
 @Controller()
 export class UsersController {
   constructor(
-    private readonly users: UsersService,
-    private readonly roles: RolesService,
+    private readonly authClient: AuthClientService,
     private readonly tax: TaxRulesService,
   ) {}
+
+  /** The authenticated actor, detached from the request for the transport. */
+  private actor(req: AuthenticatedRequest): ActorContext {
+    const user = req.user!;
+    return {
+      id: user.id,
+      organizationId: user.organizationId,
+      activePropertyId: user.activePropertyId,
+      permissions: user.permissions,
+    };
+  }
 
   // -------------------------------------------------------------------- staff
 
@@ -86,31 +104,38 @@ export class UsersController {
   @RequirePermissions('user.read')
   @Get('users')
   list(@Req() req: AuthenticatedRequest) {
-    return this.users.list(req);
+    return this.authClient.request(USER_MESSAGES.LIST, { actor: this.actor(req) });
   }
 
   @RequirePermissions('user.read')
   @Get('users/:id')
   get(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    return this.users.get(req, id);
+    return this.authClient.request(USER_MESSAGES.GET, { actor: this.actor(req), userId: id });
   }
 
   @RequirePermissions('user.invite')
   @Post('users/invite')
   invite(@Body() dto: InviteDto, @Req() req: AuthenticatedRequest) {
-    return this.users.invite(req, dto);
+    return this.authClient.request(USER_MESSAGES.INVITE, { actor: this.actor(req), input: dto });
   }
 
   @RequirePermissions('user.invite')
   @Post('users/:id/reissue-invite')
   reissue(@Param('id') id: string, @Body() dto: ReissueDto, @Req() req: AuthenticatedRequest) {
-    return this.users.reissueInvite(req, id, dto.expiresAt ?? null);
+    return this.authClient.request(USER_MESSAGES.REISSUE_INVITE, {
+      actor: this.actor(req),
+      userId: id,
+      expiresAt: dto.expiresAt ?? null,
+    });
   }
 
   @RequirePermissions('user.invite')
   @Post('users/:id/cancel-invite')
   cancel(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    return this.users.cancelInvite(req, id);
+    return this.authClient.request(USER_MESSAGES.CANCEL_INVITE, {
+      actor: this.actor(req),
+      userId: id,
+    });
   }
 
   /**
@@ -121,25 +146,41 @@ export class UsersController {
   @Public()
   @Post('users/accept-invite')
   accept(@Body() dto: AcceptDto) {
-    return this.users.acceptInvite(dto.token, dto.password);
+    return this.authClient.request(USER_MESSAGES.ACCEPT_INVITE, {
+      token: dto.token,
+      password: dto.password,
+    });
   }
 
   @RequirePermissions('user.update')
   @Patch('users/:id')
   update(@Param('id') id: string, @Body() dto: UpdateUserDto, @Req() req: AuthenticatedRequest) {
-    return this.users.updateProfile(req, id, dto);
+    return this.authClient.request(USER_MESSAGES.UPDATE, {
+      actor: this.actor(req),
+      userId: id,
+      patch: dto,
+    });
   }
 
   @RequirePermissions('role.assign')
   @Patch('users/:id/role')
   setRole(@Param('id') id: string, @Body() dto: SetRoleDto, @Req() req: AuthenticatedRequest) {
-    return this.users.setRole(req, id, dto.propertyId, dto.roleKey);
+    return this.authClient.request(USER_MESSAGES.SET_ROLE, {
+      actor: this.actor(req),
+      userId: id,
+      propertyId: dto.propertyId,
+      roleKey: dto.roleKey,
+    });
   }
 
   @RequirePermissions('user.deactivate')
   @Patch('users/:id/status')
   setStatus(@Param('id') id: string, @Body() dto: SetStatusDto, @Req() req: AuthenticatedRequest) {
-    return this.users.setStatus(req, id, dto.status);
+    return this.authClient.request(USER_MESSAGES.SET_STATUS, {
+      actor: this.actor(req),
+      userId: id,
+      status: dto.status,
+    });
   }
 
   // -------------------------------------------------------------------- roles
@@ -147,25 +188,29 @@ export class UsersController {
   @RequirePermissions('role.read')
   @Get('roles')
   roles_(@Req() req: AuthenticatedRequest) {
-    return this.roles.list(req);
+    return this.authClient.request(USER_MESSAGES.ROLES_LIST, { actor: this.actor(req) });
   }
 
   @RequirePermissions('role.read')
   @Get('permissions')
   permissions() {
-    return this.roles.permissions();
+    return this.authClient.request(USER_MESSAGES.ROLES_PERMISSIONS, {});
   }
 
   @RequirePermissions('role.read')
   @Get('roles/matrix')
   matrix(@Req() req: AuthenticatedRequest) {
-    return this.roles.matrix(req);
+    return this.authClient.request(USER_MESSAGES.ROLES_MATRIX, { actor: this.actor(req) });
   }
 
   @RequirePermissions('role.manage')
   @Patch('roles/:key/permissions')
   setPermissions(@Param('key') key: string, @Body() dto: SetPermissionsDto, @Req() req: AuthenticatedRequest) {
-    return this.roles.setRolePermissions(req, key, dto.permissionKeys);
+    return this.authClient.request(USER_MESSAGES.ROLES_SET_PERMISSIONS, {
+      actor: this.actor(req),
+      roleKey: key,
+      permissionKeys: dto.permissionKeys,
+    });
   }
 
   // ---------------------------------------------------------------- tax rules

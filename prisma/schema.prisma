@@ -515,6 +515,9 @@ model Reservation {
   taxTotal          Decimal           @default(0) @db.Decimal(12, 2)
   totalAmount       Decimal           @default(0) @db.Decimal(12, 2)
   specialRequests   String?           @db.Text
+  /// Client-supplied key that makes reservation creation idempotent: a retried
+  /// request returns the existing booking instead of creating a second one.
+  idempotencyKey    String?           @unique @db.VarChar(120)
   cancellationReason String?          @db.Text
   cancelledAt       DateTime?
   checkedInAt       DateTime?
@@ -561,16 +564,27 @@ model ReservationRoom {
 model RoomNightInventory {
   id                String   @id @default(uuid()) @db.Uuid
   roomId            String   @db.Uuid
-  reservationRoomId String   @db.Uuid
+  /// Set once a hold is converted into a booking; null while the row is a
+  /// temporary selection hold.
+  reservationRoomId String?  @db.Uuid
   stayDate          DateTime @db.Date
+  /// Temporary hold fields. A row is a hold while `holdToken` is set and
+  /// `holdExpiresAt` is in the future; expired holds are ignored by every read
+  /// and removed by the sweep.
+  holdToken         String?  @db.VarChar(120)
+  holdUserId        String?  @db.Uuid
+  holdExpiresAt     DateTime?
   createdAt         DateTime @default(now())
 
-  room            Room            @relation(fields: [roomId], references: [id], onDelete: Restrict)
-  reservationRoom ReservationRoom @relation(fields: [reservationRoomId], references: [id], onDelete: Restrict)
+  room            Room             @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  reservationRoom ReservationRoom? @relation(fields: [reservationRoomId], references: [id], onDelete: Restrict)
 
+  // One row per room-night, whether a hold or a booking: the single
+  // database-enforced authority that stops two users claiming the same night.
   @@unique([roomId, stayDate])
   @@unique([reservationRoomId, stayDate])
   @@index([stayDate])
+  @@index([holdExpiresAt])
 }
 
 model Folio {

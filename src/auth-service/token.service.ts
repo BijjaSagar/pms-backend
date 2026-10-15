@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
 
 /**
- * Session and reset token helpers.
+ * Session token helpers.
  *
  * Passwords use Argon2id because they are low-entropy human choices and need a
  * deliberately slow, memory-hard KDF. Session tokens are 256 bits of CSPRNG
@@ -19,14 +19,6 @@ export class TokenService {
   }
 
   hashSessionToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
-  }
-
-  createResetToken(): string {
-    return randomBytes(32).toString('base64url');
-  }
-
-  hashResetToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
   }
 }

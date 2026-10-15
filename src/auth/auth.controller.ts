@@ -24,7 +24,9 @@ import { Throttle } from '@nestjs/throttler';
  */
 const LOGIN_RATE_LIMIT = parseInt(process.env['LOGIN_RATE_LIMIT_PER_MINUTE'] ?? '10', 10);
 import { Public, SkipPermissionCheck } from '../common/decorators/access.decorator.js';
-import { AuthService, SESSION_COOKIE, type RequestMeta } from './auth.service.js';
+import { SESSION_COOKIE } from '../common/auth.constants.js';
+import { AuthClientService } from '../auth-client/auth-client.service.js';
+import { AUTH_MESSAGES, type AckResult, type LoginResult, type RequestMeta } from '../contracts/auth.messages.js';
 import { LoginDto, SwitchPropertyDto } from './dto/auth.dto.js';
 
 interface AuthedRequest extends Request {
@@ -38,10 +40,19 @@ interface AuthedRequest extends Request {
   };
 }
 
+/**
+ * The public auth surface.
+ *
+ * The gateway owns the HTTP concerns — rate limiting, cookies, DTO validation —
+ * while the actual credential check and session bookkeeping live in the auth
+ * microservice. Each handler forwards to it over the transport and rebuilds the
+ * HTTP response here, so the endpoints and the session cookie are unchanged
+ * from the client's point of view.
+ */
 @Controller('auth')
 export class AuthController {
   constructor(
-    private readonly auth: AuthService,
+    private readonly authClient: AuthClientService,
     private readonly config: ConfigService,
   ) {}
 
@@ -77,14 +88,22 @@ export class AuthController {
   @HttpCode(200)
   @Post('login')
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const result = await this.auth.login(dto.email, dto.password, this.meta(req));
+    const result = await this.authClient.request<LoginResult>(AUTH_MESSAGES.LOGIN, {
+      email: dto.email,
+      password: dto.password,
+      meta: this.meta(req),
+    });
 
-    res.cookie(SESSION_COOKIE, result.token, this.cookieOptions(result.expiresAt.getTime() - Date.now()));
+    res.cookie(
+      SESSION_COOKIE,
+      result.token,
+      this.cookieOptions(new Date(result.expiresAt).getTime() - Date.now()),
+    );
 
     return {
       userId: result.userId,
       activePropertyId: result.activePropertyId,
-      expiresAt: result.expiresAt.toISOString(),
+      expiresAt: result.expiresAt,
     };
   }
 
@@ -94,7 +113,7 @@ export class AuthController {
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const token = req.cookies?.[SESSION_COOKIE];
     if (token) {
-      await this.auth.logout(token, this.meta(req));
+      await this.authClient.request<AckResult>(AUTH_MESSAGES.LOGOUT, { token, meta: this.meta(req) });
     }
     res.clearCookie(SESSION_COOKIE, { path: '/' });
   }
@@ -109,7 +128,10 @@ export class AuthController {
   async me(@Req() req: AuthedRequest) {
     const user = req.user;
     if (!user) throw new UnauthorizedException();
-    return this.auth.buildMe(user.id, user.activePropertyId);
+    return this.authClient.request(AUTH_MESSAGES.ME, {
+      userId: user.id,
+      activePropertyId: user.activePropertyId,
+    });
   }
 
   @SkipPermissionCheck()
@@ -121,6 +143,11 @@ export class AuthController {
   ): Promise<void> {
     const user = req.user;
     if (!user) throw new UnauthorizedException();
-    await this.auth.switchProperty(user.id, user.sessionId, dto.propertyId, this.meta(req));
+    await this.authClient.request<AckResult>(AUTH_MESSAGES.SWITCH_PROPERTY, {
+      userId: user.id,
+      sessionId: user.sessionId,
+      propertyId: dto.propertyId,
+      meta: this.meta(req),
+    });
   }
 }
