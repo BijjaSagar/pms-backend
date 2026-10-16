@@ -30,7 +30,7 @@ export class FrontDeskService {
   constructor(
     private readonly folios: FolioService,
     private readonly audit: AuditService,
-  ) {}
+  ) { }
 
   /**
    * Posts one room charge per night, keyed by reservation and night index.
@@ -448,8 +448,8 @@ export class FrontDeskService {
 
     const lines = rows.length
       ? await db.orm.public.ReservationRoom
-          .where((m) => m.reservationId.in(rows.map((r) => r.id)))
-          .all()
+        .where((m) => m.reservationId.in(rows.map((r) => r.id)))
+        .all()
       : [];
     const roomIds = [...new Set(lines.map((l) => l.roomId).filter(Boolean))] as string[];
     const rooms = roomIds.length
@@ -464,8 +464,8 @@ export class FrontDeskService {
     // against, and guessing wrong charges the wrong guest.
     const folios = rows.length
       ? await db.orm.public.Folio
-          .where((m) => m.reservationId.in(rows.map((r) => r.id)))
-          .all()
+        .where((m) => m.reservationId.in(rows.map((r) => r.id)))
+        .all()
       : [];
     const folioByRes = new Map(folios.map((f) => [f.reservationId, f]));
 

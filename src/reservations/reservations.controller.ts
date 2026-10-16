@@ -10,18 +10,32 @@ import {
   Req,
 } from '@nestjs/common';
 import {
+  IsArray,
+  IsBoolean,
+  IsIn,
   IsInt,
   IsISO8601,
+  IsNumber,
   IsOptional,
   IsString,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { RequirePermissions } from '../common/decorators/access.decorator.js';
 import { BookingClientService } from '../booking-client/booking-client.service.js';
 import { HOLD_MESSAGES, RESERVATION_MESSAGES } from '../contracts/booking.messages.js';
 import type { ActorContext } from '../contracts/shared.js';
 import type { AuthenticatedRequest } from '../common/guards/auth.guard.js';
+
+export class ReservationExtraDto {
+  @IsString() @MaxLength(200) name: string;
+  @IsIn(['per_night', 'per_stay', 'per_guest', 'per_room']) chargeUnit: 'per_night' | 'per_stay' | 'per_guest' | 'per_room';
+  @IsNumber() quantity: number;
+  @IsString() unitRate: string;
+  @IsOptional() @IsBoolean() taxable?: boolean;
+}
 
 class CreateReservationDto {
   @IsString() primaryGuestId: string;
@@ -37,6 +51,16 @@ class CreateReservationDto {
   @IsOptional() @IsString() @MaxLength(120) holdId?: string;
   /** Makes a retried create idempotent: a replay returns the same booking. */
   @IsOptional() @IsString() @MaxLength(120) idempotencyKey?: string;
+  /** Optional extras/additions agreed at booking time. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReservationExtraDto)
+  extras?: ReservationExtraDto[];
+  /** Optional discount applied to the reservation. */
+  @IsOptional()
+  @IsString()
+  discount?: string;
 }
 
 class AmendReservationDto {

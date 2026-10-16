@@ -8,6 +8,7 @@ import { randomInt } from 'node:crypto';
 import { db } from '../prisma/db.js';
 import { brand, now, ts } from '../prisma/compat.js';
 import { AuditService } from '../audit/audit.service.js';
+import { FolioService } from './folio.service.js';
 import {
   InvalidStayError,
   businessDateFor,
@@ -16,7 +17,7 @@ import {
   validateStay,
   type DateOnly,
 } from '../common/dates.js';
-import { fromDecimal, toDecimal } from '../common/money.js';
+import { fromDecimal, toDecimal, computeTotals, type Money } from '../common/money.js';
 import { activeTaxRules, estimateStay } from '../common/tax-rules.js';
 import type { ActorContext } from '../contracts/shared.js';
 import type { CreateReservationInput, ReservationListOptions } from '../contracts/booking.messages.js';
@@ -31,6 +32,7 @@ export class ReservationsService {
   constructor(
     private readonly audit: AuditService,
     private readonly holds: RoomHoldService,
+    private readonly folios: FolioService,
   ) {}
 
   private async activeProperty(actor: ActorContext): Promise<any> {
@@ -167,12 +169,36 @@ export class ReservationsService {
     // 0.1 * 3 is 0.30000000000000004 in binary floating point, and that error
     // becomes a guest folio that does not reconcile.
     const nightlyRate = fromDecimal(String(roomType.baseRate));
-    // Stored totals are gross: room charges plus tax under the property's
-    // active rules, so the reservation list agrees with the folio later.
-    const estimate = estimateStay(nightlyRate, nights.length, await activeTaxRules(property.id));
-    const subtotal = toDecimal(estimate.subtotal);
-    const taxTotal = toDecimal(estimate.taxTotal);
-    const total = toDecimal(estimate.grandTotal);
+
+    // Validate & normalise the extras payload.
+    const extras = (input.extras ?? []).filter((e: any) => e && typeof e.name === 'string');
+    const extraBaseMinor = extras.reduce((acc, e: any) => {
+      const qty = Math.max(1, Math.floor(Number(e.quantity) || 1));
+      let unit: Money;
+      try { unit = fromDecimal(String(e.unitRate)); } catch { throw new BadRequestException('unitRate must be a decimal amount'); }
+      return acc + unit.minor * qty;
+    }, 0);
+    const roomBaseMinor = nightlyRate.minor * nights.length;
+    const grossBaseMinor = roomBaseMinor + extraBaseMinor;
+    const discountMinor = input.discount ? fromDecimal(String(input.discount)).minor : 0;
+    const appliedDiscountMinor = Math.min(Math.max(0, discountMinor), grossBaseMinor);
+    // Tax: room uses ROOM/ALL rules; extras use INCIDENTAL/ALL rules. Total per
+    // line to avoid double-counting ALL across kinds.
+    const roomTaxRules = await activeTaxRules(property.id, { appliesTo: ['ROOM', 'ALL'], stayDate: input.checkInDate as DateOnly });
+    const incidentalTaxRules = await activeTaxRules(property.id, { appliesTo: ['INCIDENTAL', 'ALL'], stayDate: input.checkInDate as DateOnly });
+    const roomTaxMinor = computeTotals([{ amount: { minor: roomBaseMinor }, taxable: true }], roomTaxRules).taxTotal.minor;
+    const extraTaxMinor = extras.reduce((acc, e: any) => {
+      const qty = Math.max(1, Math.floor(Number(e.quantity) || 1));
+      const unit = fromDecimal(String(e.unitRate));
+      const line = unit.minor * qty;
+      return acc + (e.taxable === false ? 0 : computeTotals([{ amount: { minor: line }, taxable: true }], incidentalTaxRules).taxTotal.minor);
+    }, 0);
+    const appliedTaxMinor = roomTaxMinor + extraTaxMinor;
+    const subtotalMinor = grossBaseMinor - appliedDiscountMinor;
+    const totalMinor = subtotalMinor + appliedTaxMinor;
+    const subtotal = toDecimal({ minor: subtotalMinor });
+    const taxTotal = toDecimal({ minor: appliedTaxMinor });
+    const total = toDecimal({ minor: totalMinor });
 
     const created = await db.transaction(async (tx: any) => {
       let reservation = null;
@@ -212,6 +238,69 @@ export class ReservationsService {
         nightlyRate: brand(toDecimal(nightlyRate)),
         ratePlanName: brand(null),
       });
+
+      // Open a folio at booking time so the extras the guest agreed to are
+      // recorded against the stay rather than left as frontend-only estimates.
+      const d = new Date();
+      const folioNo = `F-${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}-${String(randomInt(0, 100_000)).padStart(5, '0')}`;
+      const folio = await tx.orm.public.Folio.create({
+        propertyId: brand(property.id),
+        reservationId: brand(reservation.id),
+        folioNo: brand(folioNo),
+        status: brand('OPEN'),
+        currencyCode: brand(property.currencyCode),
+        openedAt: now(),
+      });
+      const createdItems: any[] = [];
+      const roomLineQty = nights.length;
+      let excess = 0;
+      const roomItem = await tx.orm.public.FolioItem.create({
+        folioId: brand(folio.id),
+        type: brand('ROOM_CHARGE') as never,
+        description: brand(`Room — ${roomType.name} × ${roomLineQty}n`),
+        quantity: brand(String(roomLineQty)),
+        unitAmount: brand(toDecimal(nightlyRate)),
+        taxAmount: brand(toDecimal({ minor: roomTaxMinor })),
+        taxSnapshot: brand(JSON.stringify(roomTaxRules)),
+        totalAmount: brand(toDecimal({ minor: nightlyRate.minor * roomLineQty })),
+        postedById: brand(actor.id),
+        isVoided: brand(false),
+      });
+      createdItems.push(roomItem);
+
+      for (const e of extras) {
+        const qty = Math.max(1, Math.floor(Number(e.quantity) || 1));
+        const unit = fromDecimal(String(e.unitRate));
+        const lineMinor = unit.minor * qty;
+        const lineTax = e.taxable === false ? 0 : computeTotals([{ amount: { minor: lineMinor }, taxable: true }], incidentalTaxRules).taxTotal.minor;
+        createdItems.push(
+          await tx.orm.public.FolioItem.create({
+            folioId: brand(folio.id),
+            type: brand('INCIDENTAL') as never,
+            description: brand(e.name),
+            quantity: brand(String(qty)),
+            unitAmount: brand(toDecimal(unit)),
+            taxAmount: brand(toDecimal({ minor: lineTax })),
+            taxSnapshot: brand(JSON.stringify(incidentalTaxRules)),
+            totalAmount: brand(toDecimal({ minor: lineMinor })),
+            postedById: brand(actor.id),
+            isVoided: brand(false),
+          }),
+        );
+      }
+      if (appliedDiscountMinor > 0) {
+        await tx.orm.public.FolioItem.create({
+          folioId: brand(folio.id),
+          type: brand('DISCOUNT') as never,
+          description: brand('Reservation discount'),
+          quantity: brand('1'),
+          unitAmount: brand(toDecimal({ minor: -appliedDiscountMinor })),
+          taxAmount: brand('0.00'),
+          totalAmount: brand(toDecimal({ minor: -appliedDiscountMinor })),
+          postedById: brand(actor.id),
+          isVoided: brand(false),
+        });
+      }
 
       // Convert the caller's live hold into permanent inventory inside this
       // transaction. This validates the hold (ownership, expiry, exact dates)

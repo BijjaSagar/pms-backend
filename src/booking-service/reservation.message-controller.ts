@@ -4,6 +4,7 @@ import { toRpcException } from '../common/rpc-to-http.js';
 import type { DateOnly } from '../common/dates.js';
 import type { ActorContext } from '../contracts/shared.js';
 import {
+  BOOKING_MESSAGES,
   HOLD_MESSAGES,
   RESERVATION_MESSAGES,
   type CreateReservationInput,
@@ -85,5 +86,11 @@ export class ReservationMessageController {
   @MessagePattern(HOLD_MESSAGES.RELEASE)
   release(@Payload() d: { actor: ActorContext; holdId: string }) {
     return this.run(() => this.holds.release(d.actor, d.holdId));
+  }
+
+  /** Liveness probe for the gateway's `/health/booking` endpoint. */
+  @MessagePattern(BOOKING_MESSAGES.PING)
+  ping(): { status: string } {
+    return { status: 'ok' };
   }
 }

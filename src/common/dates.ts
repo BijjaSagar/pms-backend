@@ -56,6 +56,26 @@ export function nightCount(checkIn: DateOnly, checkOut: DateOnly): number {
   return Math.max(0, diffDays(checkIn, checkOut));
 }
 
+/**
+ * True when two stays overlap in occupied room-nights.
+ *
+ * Check-in is inclusive and check-out is exclusive, so two stays that share a
+ * boundary day (`A.checkOut === B.checkIn`) do NOT overlap — the departing
+ * guest's room is free for the arriving one the same morning.
+ *
+ * This mirrors the SQL overlap predicate `A.checkIn < B.checkOut && B.checkIn <
+ * A.checkOut`. Always validate dates first; passing invalid or inverted ranges
+ * produces misleading results rather than throwing.
+ */
+export function staysOverlap(
+  aCheckIn: DateOnly,
+  aCheckOut: DateOnly,
+  bCheckIn: DateOnly,
+  bCheckOut: DateOnly,
+): boolean {
+  return aCheckIn < bCheckOut && bCheckIn < aCheckOut;
+}
+
 export class InvalidStayError extends Error {
   constructor(message: string) {
     super(message);

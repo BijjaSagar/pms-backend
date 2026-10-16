@@ -15,7 +15,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         'DATABASE_URL is not set. Copy .env.example to .env and set it.',
       );
     }
-    this.logger.log('Database client initialized');
+    try {
+      const { latencyMs } = await this.checkConnection();
+      this.logger.log(`Database connected successfully (${latencyMs}ms)`);
+    } catch (err) {
+      this.logger.error(`Database connection check failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    }
   }
 
   async checkConnection(): Promise<{ ok: boolean; latencyMs: number }> {

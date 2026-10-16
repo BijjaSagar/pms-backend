@@ -2,8 +2,11 @@ import 'dotenv/config';
 import { readFileSync } from 'node:fs';
 import { Pool } from 'pg';
 
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 const pool = new Pool({ connectionString: process.env['DATABASE_URL'] });
-const KIT = 'D:/Triounity/Hotel PMS/Implementation kit/rbac-seed.ts';
+const KIT = join(dirname(fileURLToPath(import.meta.url)), 'seed.ts');
 
 const ROLES = ['ADMIN', 'MANAGER', 'FRONT_DESK', 'HOUSEKEEPING', 'AUDITOR'] as const;
 type Role = (typeof ROLES)[number];

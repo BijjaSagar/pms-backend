@@ -59,6 +59,11 @@ export const INVOICE_MESSAGES = {
   PAYMENT_LEDGER: 'payment.ledger',
 } as const;
 
+/** Service liveness probe. */
+export const BOOKING_MESSAGES = {
+  PING: 'booking.ping',
+} as const;
+
 /**
  * Redis pub/sub channel carrying availability changes to the gateway, which
  * fans them out to browsers over Server-Sent Events.
@@ -109,6 +114,16 @@ export interface CreateReservationInput {
   holdId?: string | null;
   /** Makes a retried create idempotent: a replay returns the same booking. */
   idempotencyKey?: string | null;
+  /** Optional extras/additions to add to the folio at booking time. */
+  extras?: Array<{
+    name: string;
+    chargeUnit: 'per_night' | 'per_stay' | 'per_guest' | 'per_room';
+    quantity: number;
+    unitRate: string;
+    taxable?: boolean;
+  }>;
+  /** Optional discount to apply against the stay total. */
+  discount?: string;
 }
 
 /** Result of acquiring or refreshing a hold. */

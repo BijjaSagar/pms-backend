@@ -2,7 +2,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { DatabaseModule } from './database/database.module.js';
-import { HealthController } from './health/health.controller.js';
+import { HealthModule } from './health/health.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { AuditModule } from './audit/audit.module.js';
 import { AuthModule } from './auth/auth.module.js';
@@ -13,6 +13,10 @@ import { AuthGuard } from './common/guards/auth.guard.js';
 import { PermissionsGuard } from './common/guards/permissions.guard.js';
 import { PropertyModule } from './properties/properties.module.js';
 import { GuestReservationModule } from './reservations/reservations.module.js';
+import { FrontDeskModule } from './front-desk/front-desk.module.js';
+import { HousekeepingModule } from './housekeeping/housekeeping.module.js';
+import { ReportsModule } from './reports/reports.module.js';
+import { UsersModule } from './users/users.module.js';
 import { DatabaseExceptionFilter } from './common/filters/database-exception.filter.js';
 import { CsrfMiddleware } from './common/middleware/csrf.middleware.js';
 
@@ -23,15 +27,12 @@ import { CsrfMiddleware } from './common/middleware/csrf.middleware.js';
  * touching code. The default is the production value.
  */
 const GLOBAL_RATE_LIMIT = parseInt(process.env['RATE_LIMIT_PER_MINUTE'] ?? '120', 10);
-import { FrontDeskModule } from './front-desk/front-desk.module.js';
-import { HousekeepingModule } from './housekeeping/housekeeping.module.js';
-import { ReportsModule } from './reports/reports.module.js';
-import { UsersModule } from './users/users.module.js';
 
 @Module({
   imports: [
     AppConfigModule,
     DatabaseModule,
+    HealthModule,
     AuditModule,
     // Global client handle on the auth microservice; the session guard and the
     // auth/users controllers reach it without importing it themselves.
@@ -50,7 +51,7 @@ import { UsersModule } from './users/users.module.js';
     // Global default. Individual routes tighten this, notably POST /auth/login.
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: GLOBAL_RATE_LIMIT }]),
   ],
-  controllers: [HealthController],
+  controllers: [],
   providers: [
     // Order matters: throttling, then authentication (populates request.user),
     // then permissions. PermissionsGuard must never run before AuthGuard.
