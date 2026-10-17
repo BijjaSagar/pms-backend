@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  HttpException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -25,17 +26,14 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
- * Populates request.user from the session cookie.
+ * Populates request.user from either session cookie or Bearer access token.
  *
  * Runs before PermissionsGuard so that guard only ever sees a user that came
  * from trusted server-side session resolution. Honours @Public(), which is what
  * makes login, health and password-reset reachable without a session.
  *
- * Session resolution and permission lookup now happen in the auth microservice,
- * so this is a single transport round-trip that returns both. Permissions are
- * still resolved per request from the current membership, so a role change or
- * deactivation takes effect immediately rather than waiting for a stale session
- * claim to expire.
+ * Fails closed: if Redis is unreachable or returns an error, unauthorized
+ * access is strictly rejected.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -44,20 +42,55 @@ export class AuthGuard implements CanActivate {
     private readonly authClient: AuthClientService,
   ) {}
 
+  private extractToken(req: Request): string | undefined {
+    // 1. Check session cookie
+    const cookieToken = req.cookies?.[SESSION_COOKIE];
+    if (cookieToken && typeof cookieToken === 'string' && cookieToken.trim()) {
+      return cookieToken.trim();
+    }
+
+    // 2. Check Authorization: Bearer <token>
+    const authHeader = req.headers.authorization;
+    if (authHeader && typeof authHeader === 'string') {
+      const [type, token] = authHeader.split(' ');
+      if (type?.toLowerCase() === 'bearer' && token?.trim()) {
+        return token.trim();
+      }
+    }
+
+    return undefined;
+  }
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const target = [context.getHandler(), context.getClass()];
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_ROUTE, target);
     if (isPublic) return true;
 
     const req = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const token = req.cookies?.[SESSION_COOKIE];
+    const token = this.extractToken(req);
 
-    const resolved = await this.authClient.request<PrincipalResult | null>(
-      AUTH_MESSAGES.PRINCIPAL,
-      { token },
-    );
-    if (!resolved) {
-      throw new UnauthorizedException();
+    if (!token) {
+      throw new UnauthorizedException('Authentication required');
+    }
+
+    let resolved: PrincipalResult | null = null;
+    try {
+      resolved = await this.authClient.request<PrincipalResult | null>(
+        AUTH_MESSAGES.PRINCIPAL,
+        { token },
+      );
+    } catch (err) {
+      // If the auth microservice returned an explicit HTTP error (e.g. 401 token expired/invalid signature),
+      // bubble it up directly.
+      if (err instanceof HttpException) {
+        throw err;
+      }
+      // Redis failure or microservice disconnect: FAIL CLOSED!
+      throw new UnauthorizedException('Authentication service temporarily unavailable');
+    }
+
+    if (!resolved || !resolved.principal) {
+      throw new UnauthorizedException('Invalid or expired authentication credentials');
     }
 
     req.user = {

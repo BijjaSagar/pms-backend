@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { db } from '../prisma/db.js';
 import { brand } from '../prisma/compat.js';
 
+import { scrubMetadata } from '../common/pii.js';
+
 /**
  * Fields an audit caller may supply. Credentials, password hashes, reset tokens
  * and session tokens are deliberately absent from this type so they cannot be
@@ -35,6 +37,9 @@ export class AuditService {
    */
   async record(event: AuditEvent, tx?: unknown): Promise<void> {
     const client = (tx ?? db) as typeof db;
+    const scrubbed = event.metadata
+      ? (scrubMetadata(event.metadata) as Record<string, unknown>)
+      : null;
     try {
       await client.orm.public.AuditLog.create({
         organizationId: brand(event.organizationId),
@@ -48,7 +53,7 @@ export class AuditService {
         requestId: brand(event.requestId ?? null),
         ipAddress: brand(event.ipAddress ?? null),
         userAgent: brand(event.userAgent ?? null),
-        metadata: brand(event.metadata ?? null),
+        metadata: brand(scrubbed),
       });
     } catch (err) {
       // An audit failure must never mask the original outcome, but it must be loud.

@@ -3,20 +3,22 @@ import { MessagePattern, Payload } from '@nestjs/microservices';
 import {
   AUTH_MESSAGES,
   type AckResult,
+  type ForgotPasswordResult,
   type LoginResult,
   type PrincipalResult,
+  type RefreshResult,
   type RequestMeta,
+  type ResetPasswordResult,
 } from '../contracts/auth.messages.js';
 import { toRpcException } from '../common/rpc-to-http.js';
 import { AuthService, type AuthMeView } from './auth.service.js';
 
 /**
- * Session and identity commands.
+ * Session, identity, and security commands.
  *
- * These are the same operations the HTTP `AuthController` used to call directly
- * before the split; only the entry point changed. Each handler funnels through
- * `run` so a thrown HTTP exception is converted to a transport-safe
- * `RpcException` the gateway can rebuild.
+ * Runs inside the auth microservice. Translates incoming RPC payloads into
+ * AuthService operations and maps thrown exceptions into transport-safe
+ * RpcExceptions.
  */
 @Controller()
 export class AuthMessageController {
@@ -34,16 +36,21 @@ export class AuthMessageController {
   login(@Payload() data: { email: string; password: string; meta: RequestMeta }): Promise<LoginResult> {
     return this.run(async () => {
       const result = await this.auth.login(data.email, data.password, data.meta);
-      // Dates do not survive JSON serialisation, so the expiry travels as an
-      // ISO string the gateway turns back into a Date for the cookie max-age.
       return {
         token: result.token,
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
         expiresAt: result.expiresAt.toISOString(),
         userId: result.userId,
         organizationId: result.organizationId,
         activePropertyId: result.activePropertyId,
       };
     });
+  }
+
+  @MessagePattern(AUTH_MESSAGES.REFRESH)
+  refresh(@Payload() data: { refreshToken: string; meta: RequestMeta }): Promise<RefreshResult> {
+    return this.run(() => this.auth.refresh(data.refreshToken, data.meta));
   }
 
   @MessagePattern(AUTH_MESSAGES.LOGOUT)
@@ -54,13 +61,33 @@ export class AuthMessageController {
     });
   }
 
+  @MessagePattern(AUTH_MESSAGES.LOGOUT_ALL)
+  logoutAll(@Payload() data: { userId: string; meta: RequestMeta }): Promise<AckResult> {
+    return this.run(async () => {
+      await this.auth.logoutAll(data.userId, data.meta);
+      return { ok: true } as const;
+    });
+  }
+
+  @MessagePattern(AUTH_MESSAGES.FORGOT_PASSWORD)
+  forgotPassword(
+    @Payload() data: { email: string; meta: RequestMeta },
+  ): Promise<ForgotPasswordResult> {
+    return this.run(() => this.auth.forgotPassword(data.email, data.meta));
+  }
+
+  @MessagePattern(AUTH_MESSAGES.RESET_PASSWORD)
+  resetPassword(
+    @Payload() data: { token: string; password: string; meta: RequestMeta },
+  ): Promise<ResetPasswordResult> {
+    return this.run(() => this.auth.resetPassword(data.token, data.password, data.meta));
+  }
+
   @MessagePattern(AUTH_MESSAGES.PRINCIPAL)
   principal(@Payload() data: { token?: string }): Promise<PrincipalResult | null> {
     return this.run(async () => {
       const principal = await this.auth.resolveSession(data.token);
       if (!principal) return null;
-      // Permissions are resolved per request so a role change or deactivation
-      // takes effect immediately rather than waiting for a session to expire.
       const permissions = principal.activePropertyId
         ? await this.auth.permissionsForProperty(principal.userId, principal.activePropertyId)
         : [];

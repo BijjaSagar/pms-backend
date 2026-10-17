@@ -20,6 +20,9 @@ import { UsersModule } from './users/users.module.js';
 import { DatabaseExceptionFilter } from './common/filters/database-exception.filter.js';
 import { CsrfMiddleware } from './common/middleware/csrf.middleware.js';
 
+import { ConfigService } from '@nestjs/config';
+import { RedisThrottlerStorage } from './common/redis-throttler.storage.js';
+
 /**
  * Global per-IP request ceiling.
  *
@@ -48,8 +51,15 @@ const GLOBAL_RATE_LIMIT = parseInt(process.env['RATE_LIMIT_PER_MINUTE'] ?? '120'
     HousekeepingModule,
     ReportsModule,
     UsersModule,
-    // Global default. Individual routes tighten this, notably POST /auth/login.
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: GLOBAL_RATE_LIMIT }]),
+    // Global distributed rate limiting across instances using Redis storage.
+    ThrottlerModule.forRootAsync({
+      imports: [AppConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        throttlers: [{ ttl: 60_000, limit: GLOBAL_RATE_LIMIT }],
+        storage: new RedisThrottlerStorage(config),
+      }),
+    }),
   ],
   controllers: [],
   providers: [

@@ -15,11 +15,16 @@ async function bootstrap() {
   // Cookie parsing
   app.use(cookieParser());
 
-  // CORS for local frontend
-  const frontendOrigin = process.env['FRONTEND_URL'] ?? 'http://localhost:5173';
+  // CORS for frontend and trusted origins
+  const allowedOrigins = (process.env['FRONTEND_URL'] ?? 'http://localhost:5173')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: [frontendOrigin],
+    origin: allowedOrigins,
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'X-Requested-With', 'X-Request-Id'],
   });
 
   // API prefix

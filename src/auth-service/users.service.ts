@@ -13,6 +13,7 @@ import { parseTimestamp } from '../common/dates.js';
 import { ARGON2_OPTS } from './auth.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { decideAccountChange, decideRoleGrant } from './escalation.policy.js';
+import { isUniqueViolation } from '../common/db-errors.js';
 import type { ActorContext } from '../contracts/auth.messages.js';
 
 /**
@@ -195,14 +196,23 @@ export class UsersService {
 
     const token = randomBytes(32).toString('hex');
     const expiresAt = input.expiresAt ? new Date(input.expiresAt) : new Date(Date.now() + 7 * 86_400_000);
-
-    const user = existing ?? (await db.orm.public.User.create({
-      email: brand(email),
-      fullName: brand(input.fullName.trim()),
-      status: brand('INVITED'),
-      inviteToken: brand(token),
-      inviteExpiresAt: ts(expiresAt),
-    }));
+    let user = existing;
+    if (!user) {
+      try {
+        user = await db.orm.public.User.create({
+          email: brand(email),
+          fullName: brand(input.fullName.trim()),
+          status: brand('INVITED'),
+          inviteToken: brand(token),
+          inviteExpiresAt: ts(expiresAt),
+        });
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new ConflictException('That email already belongs to an account');
+        }
+        throw err;
+      }
+    }
 
     if (existing) {
       await db.orm.public.User.where({ id: brand(user.id) }).update({

@@ -113,9 +113,11 @@ export class DatabaseExceptionFilter implements ExceptionFilter {
       return;
     }
 
-    this.logger.error(
-      `unhandled: ${code ?? 'no-code'} ${String(err?.message ?? exception).slice(0, 300)}\n${err?.stack ?? '(no stack)'}`,
-    );
+    const rawError = `${code ?? 'no-code'} ${String(err?.message ?? exception).slice(0, 300)}\n${err?.stack ?? '(no stack)'}`;
+    const sanitizedError = rawError
+      .replace(/postgres(ql)?:\/\/[^@\s]+@[^\s]+/gi, 'postgresql://***:***@...')
+      .replace(/(password|token|secret|key|inviteToken)=['"]?[^'"\s]+['"]?/gi, '$1=***');
+    this.logger.error(`unhandled: ${sanitizedError}`);
     // Never leak driver text, SQL or stack traces to the client.
     res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,

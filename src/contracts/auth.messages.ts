@@ -14,7 +14,15 @@ export const AUTH_MESSAGES = {
   LOGIN: 'auth.login',
   /** Revokes the presented session. Idempotent. */
   LOGOUT: 'auth.logout',
-  /** Resolves a session token to a principal plus its effective permissions. */
+  /** Revokes all sessions for the user across all instances. */
+  LOGOUT_ALL: 'auth.logout-all',
+  /** Rotates refresh token and returns a fresh access token. */
+  REFRESH: 'auth.refresh',
+  /** Generates a single-use time-limited password-reset token. */
+  FORGOT_PASSWORD: 'auth.forgot-password',
+  /** Consumes a password-reset token and sets a new password. */
+  RESET_PASSWORD: 'auth.reset-password',
+  /** Resolves an access token or session token to a principal plus its effective permissions. */
   PRINCIPAL: 'auth.principal',
   /** The current user with memberships and permissions. */
   ME: 'auth.me',
@@ -45,7 +53,7 @@ export const USER_MESSAGES = {
 // that already import them from this module are unaffected.
 export type { RequestMeta, ActorContext, AckResult } from './shared.js';
 
-/** The minimal principal resolved from a session token. */
+/** The minimal principal resolved from a session or access token. */
 export interface Principal {
   userId: string;
   sessionId: string;
@@ -53,7 +61,7 @@ export interface Principal {
   activePropertyId: string | null;
 }
 
-/** Result of resolving a session: a principal and its effective permissions. */
+/** Result of resolving a session or token: a principal and its effective permissions. */
 export interface PrincipalResult {
   principal: Principal;
   permissions: string[];
@@ -62,10 +70,31 @@ export interface PrincipalResult {
 /** Response to `auth.login`; `expiresAt` is an ISO string over the wire. */
 export interface LoginResult {
   token: string;
+  accessToken: string;
+  refreshToken: string;
   expiresAt: string;
   userId: string;
   organizationId: string;
   activePropertyId: string | null;
+}
+
+
+export interface RefreshResult {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+}
+
+export interface ForgotPasswordResult {
+  ok: boolean;
+  message: string;
+  resetToken?: string;
+  expiresAt?: string;
+}
+
+export interface ResetPasswordResult {
+  ok: boolean;
+  message: string;
 }
 
 

@@ -7,18 +7,21 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
+import { isUniqueViolation } from './db-errors.js';
 
 /**
- * Translates an exception across the microservice boundary without losing its
- * meaning.
- *
- * The old in-process services threw Nest HTTP exceptions, and the verification
- * suites assert on the exact status codes (401 for a missing session, 403 for a
- * denied permission, 409 for a duplicate invite). Over the Redis transport an
- * error is serialised to plain data, so the status has to be carried explicitly
- * and rebuilt on the other side. `toRpcException` runs inside the auth service;
- * `rpcErrorToHttpException` runs in the gateway.
+ * Strips database connection credentials, passwords, and raw secrets from error messages
+ * before they cross the microservice or HTTP boundary.
  */
+function sanitizeMessage(msg: unknown): string | string[] {
+  if (Array.isArray(msg)) {
+    return msg.map((m) => (typeof m === 'string' ? sanitizeMessage(m) as string : m));
+  }
+  if (typeof msg !== 'string') return 'Internal server error';
+  return msg
+    .replace(/postgres(ql)?:\/\/[^@\s]+@[^\s]+/gi, 'postgresql://***:***@...')
+    .replace(/(password|token|secret|key)=['"]?[^'"\s]+['"]?/gi, '$1=***');
+}
 
 /** Service side: turns any thrown error into a transport-safe RpcException. */
 export function toRpcException(error: unknown): RpcException {
@@ -30,12 +33,20 @@ export function toRpcException(error: unknown): RpcException {
       typeof response === 'string'
         ? response
         : ((response as { message?: string | string[] }).message ?? error.message);
-    return new RpcException({ status: error.getStatus(), message });
+    return new RpcException({ status: error.getStatus(), message: sanitizeMessage(message) });
   }
 
+  if (isUniqueViolation(error)) {
+    return new RpcException({
+      status: 409,
+      message: 'That value already exists. Duplicate entry was rejected.',
+    });
+  }
+
+  const errMessage = error instanceof Error ? error.message : 'Internal server error';
   return new RpcException({
     status: 500,
-    message: error instanceof Error ? error.message : 'Internal server error',
+    message: sanitizeMessage(errMessage),
   });
 }
 
@@ -51,10 +62,10 @@ export function rpcErrorToHttpException(error: unknown): HttpException {
     const candidate = shape.status ?? shape.statusCode;
     if (typeof candidate === 'number') status = candidate;
     if (typeof shape.message === 'string' || Array.isArray(shape.message)) {
-      message = shape.message as string | string[];
+      message = sanitizeMessage(shape.message);
     }
   } else if (typeof raw === 'string') {
-    message = raw;
+    message = sanitizeMessage(raw);
   }
 
   switch (status) {

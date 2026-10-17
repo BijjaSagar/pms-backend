@@ -32,10 +32,11 @@ const maskName = (first: string | null, last: string | null) => {
 export { maskEmail, maskPhone, maskName };
 
 /** Keys whose values are treated as sensitive wherever they appear. */
-const SENSITIVE_KEY = /(email|phone|mobile|address|passport|aadhaar|pan|card|dob|birth)/i;
+const SENSITIVE_KEY =
+  /(email|phone|mobile|address|passport|aadhaar|pan|card|dob|birth|password|secret|token|api[_-]?key|credential|hash|bearer|auth)/i;
 
 /** Values that look like secrets regardless of the key they sit under. */
-const SECRET_VALUE = /(?:password|secret|token|api[_-]?key|bearer\s)/i;
+const SECRET_VALUE = /(?:password|secret|token|api[_-]?key|bearer\s|argon2|\$argon2)/i;
 
 const MASK = '***';
 
@@ -50,7 +51,16 @@ const MASK = '***';
 export function scrubMetadata(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(scrubMetadata);
   if (value === null || typeof value !== 'object') {
-    return typeof value === 'string' && SECRET_VALUE.test(value) ? MASK : value;
+    if (typeof value === 'string') {
+      if (
+        SECRET_VALUE.test(value) ||
+        /postgres(ql)?:\/\/[^@\s]+@[^\s]+/i.test(value) ||
+        /^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}$/.test(value)
+      ) {
+        return MASK;
+      }
+    }
+    return value;
   }
 
   const out: Record<string, unknown> = {};

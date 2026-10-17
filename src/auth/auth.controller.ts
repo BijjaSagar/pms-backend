@@ -12,22 +12,27 @@ import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 
-/**
- * Login attempts allowed per IP per minute.
- *
- * Environment-driven for the same reason as the global ceiling: the
- * verification suites authenticate as five roles plus every account they
- * create, so back-to-back runs would otherwise be throttled into reporting
- * failures that have nothing to do with the code. The default is the production
- * value of 10; only the test harness raises it, and the security suite
- * deliberately leaves it at the default so it can prove the throttle works.
- */
 const LOGIN_RATE_LIMIT = parseInt(process.env['LOGIN_RATE_LIMIT_PER_MINUTE'] ?? '10', 10);
+
 import { Public, SkipPermissionCheck } from '../common/decorators/access.decorator.js';
-import { SESSION_COOKIE } from '../common/auth.constants.js';
+import { REFRESH_COOKIE, SESSION_COOKIE } from '../common/auth.constants.js';
 import { AuthClientService } from '../auth-client/auth-client.service.js';
-import { AUTH_MESSAGES, type AckResult, type LoginResult, type RequestMeta } from '../contracts/auth.messages.js';
-import { LoginDto, SwitchPropertyDto } from './dto/auth.dto.js';
+import {
+  AUTH_MESSAGES,
+  type AckResult,
+  type ForgotPasswordResult,
+  type LoginResult,
+  type RefreshResult,
+  type RequestMeta,
+  type ResetPasswordResult,
+} from '../contracts/auth.messages.js';
+import {
+  ForgotPasswordDto,
+  LoginDto,
+  RefreshTokenDto,
+  ResetPasswordDto,
+  SwitchPropertyDto,
+} from './dto/auth.dto.js';
 
 interface AuthedRequest extends Request {
   user?: {
@@ -43,11 +48,8 @@ interface AuthedRequest extends Request {
 /**
  * The public auth surface.
  *
- * The gateway owns the HTTP concerns — rate limiting, cookies, DTO validation —
- * while the actual credential check and session bookkeeping live in the auth
- * microservice. Each handler forwards to it over the transport and rebuilds the
- * HTTP response here, so the endpoints and the session cookie are unchanged
- * from the client's point of view.
+ * Owns HTTP concerns: rate limiting, secure cookies (HttpOnly, SameSite, Secure),
+ * DTO validation, and passes commands over transport to the auth microservice.
  */
 @Controller('auth')
 export class AuthController {
@@ -59,69 +61,165 @@ export class AuthController {
   private meta(req: Request): RequestMeta {
     return {
       ip: req.ip ?? null,
-      userAgent: req.headers['user-agent'] ?? null,
+      userAgent: (req.headers['user-agent'] as string | undefined) ?? null,
       requestId: (req.headers['x-request-id'] as string | undefined) ?? null,
     };
+  }
+
+  private isProduction(): boolean {
+    return (
+      this.config.get<string>('nodeEnv') === 'production' ||
+      process.env['COOKIE_SECURE'] === 'true'
+    );
   }
 
   private cookieOptions(maxAgeMs: number) {
     return {
       httpOnly: true,
       sameSite: 'lax' as const,
-      secure: this.config.get<string>('nodeEnv') === 'production',
+      secure: this.isProduction(),
       path: '/',
       maxAge: maxAgeMs,
     };
   }
 
+  private clearCookieOptions() {
+    return {
+      httpOnly: true,
+      sameSite: 'lax' as const,
+      secure: this.isProduction(),
+      path: '/',
+    };
+  }
+
   /**
-   * Login is rate limited per IP. The throttle is the first line of defence
-   * against brute force; Argon2id cost is the second.
-   *
-   * The limit is deliberately not tighter: several staff share one front-desk
-   * NAT, so a very low ceiling would let one person's mistyped attempts lock
-   * out their colleagues. Per-account lockout is the stronger control and is a
-   * later hardening step.
+   * Login is rate limited per IP and verified against timing-safe argon2id.
+   * Produces appropriately generic error messages for nonexistent accounts and wrong passwords.
    */
   @Public()
   @Throttle({ default: { limit: LOGIN_RATE_LIMIT, ttl: 60_000 } })
   @HttpCode(200)
   @Post('login')
-  async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  async login(
+    @Body() dto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const result = await this.authClient.request<LoginResult>(AUTH_MESSAGES.LOGIN, {
       email: dto.email,
       password: dto.password,
       meta: this.meta(req),
     });
 
-    res.cookie(
-      SESSION_COOKIE,
-      result.token,
-      this.cookieOptions(new Date(result.expiresAt).getTime() - Date.now()),
-    );
+    const sessionMaxAge = new Date(result.expiresAt).getTime() - Date.now();
+    const refreshMaxAge = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+    res.cookie(SESSION_COOKIE, result.token, this.cookieOptions(sessionMaxAge));
+    if (result.refreshToken) {
+      res.cookie(REFRESH_COOKIE, result.refreshToken, this.cookieOptions(refreshMaxAge));
+    }
 
     return {
       userId: result.userId,
       activePropertyId: result.activePropertyId,
       expiresAt: result.expiresAt,
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
     };
   }
 
+  /**
+   * Rotates refresh tokens and returns fresh access token.
+   * Reusing an already-rotated token triggers reuse detection and revokes the session.
+   */
+  @Public()
+  @HttpCode(200)
+  @Post('refresh')
+  async refresh(
+    @Body() dto: RefreshTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const token = dto.refreshToken ?? req.cookies?.[REFRESH_COOKIE];
+    if (!token) {
+      throw new UnauthorizedException('Refresh token is required');
+    }
+
+    const result = await this.authClient.request<RefreshResult>(AUTH_MESSAGES.REFRESH, {
+      refreshToken: token,
+      meta: this.meta(req),
+    });
+
+    const accessMaxAge = new Date(result.expiresAt).getTime() - Date.now();
+    const refreshMaxAge = 7 * 24 * 60 * 60 * 1000;
+
+    res.cookie(SESSION_COOKIE, result.accessToken, this.cookieOptions(accessMaxAge));
+    res.cookie(REFRESH_COOKIE, result.refreshToken, this.cookieOptions(refreshMaxAge));
+
+    return {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      expiresAt: result.expiresAt,
+    };
+  }
+
+  /** Revokes the current session and refresh token. */
   @SkipPermissionCheck()
   @HttpCode(204)
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const token = req.cookies?.[SESSION_COOKIE];
+    const token = req.cookies?.[SESSION_COOKIE] ?? req.headers.authorization?.replace(/^Bearer\s+/i, '');
     if (token) {
       await this.authClient.request<AckResult>(AUTH_MESSAGES.LOGOUT, { token, meta: this.meta(req) });
     }
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    res.clearCookie(SESSION_COOKIE, this.clearCookieOptions());
+    res.clearCookie(REFRESH_COOKIE, this.clearCookieOptions());
+  }
+
+  /** Revokes all sessions for the user across all instances. */
+  @SkipPermissionCheck()
+  @HttpCode(204)
+  @Post('logout-all')
+  async logoutAll(@Req() req: AuthedRequest, @Res({ passthrough: true }) res: Response) {
+    const user = req.user;
+    if (!user) throw new UnauthorizedException();
+
+    await this.authClient.request<AckResult>(AUTH_MESSAGES.LOGOUT_ALL, {
+      userId: user.id,
+      meta: this.meta(req),
+    });
+
+    res.clearCookie(SESSION_COOKIE, this.clearCookieOptions());
+    res.clearCookie(REFRESH_COOKIE, this.clearCookieOptions());
+  }
+
+  /** Requests a password reset token. Produces a generic response. */
+  @Public()
+  @Throttle({ default: { limit: LOGIN_RATE_LIMIT, ttl: 60_000 } })
+  @HttpCode(200)
+  @Post('forgot-password')
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    return this.authClient.request<ForgotPasswordResult>(AUTH_MESSAGES.FORGOT_PASSWORD, {
+      email: dto.email,
+      meta: this.meta(req),
+    });
+  }
+
+  /** Consumes a single-use password reset token and sets a new password. */
+  @Public()
+  @Throttle({ default: { limit: LOGIN_RATE_LIMIT, ttl: 60_000 } })
+  @HttpCode(200)
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto, @Req() req: Request) {
+    return this.authClient.request<ResetPasswordResult>(AUTH_MESSAGES.RESET_PASSWORD, {
+      token: dto.token,
+      password: dto.password,
+      meta: this.meta(req),
+    });
   }
 
   /**
-   * Current principal. Requires a session but no domain permission, so it is
-   * marked @SkipPermissionCheck; the guard still enforces authentication and
-   * the service re-validates property membership.
+   * Current principal. Requires a session but no domain permission.
    */
   @SkipPermissionCheck()
   @Get('me')
